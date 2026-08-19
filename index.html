@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<!-- apollo-dashboard v1.0.0 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Apollo Scooters · Weekly Performance · Elite Brands</title>
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root{
+    --ink:#050816; --card:#0B1B26; --border:rgba(148,163,184,.15);
+    --cyan:#2AAEE0; --cyan-dim:rgba(42,174,224,.45); --amber:#C98500;
+    --text:#E5E9F0; --muted:#9CA3AF; --good:#3fd68f; --bad:#FF6B6B;
+    --head:'Space Grotesk',Arial,sans-serif; --body:Inter,system-ui,'Segoe UI',Arial,sans-serif;
+    --mono:'JetBrains Mono',Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:linear-gradient(165deg,var(--ink) 0%,#0B1B26 70%,#0a1620 100%);min-height:100vh;color:var(--text);font-family:var(--body);font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1280px;margin:0 auto;padding:36px 44px 28px;display:flex;flex-direction:column;gap:22px;background-image:radial-gradient(ellipse 900px 420px at 75% -10%,rgba(42,174,224,.14),transparent 60%)}
+  a{color:var(--cyan)} a:hover{color:#2393BE}
+
+  header{display:flex;align-items:center;gap:16px}
+  .brandmark{width:46px;height:46px;border-radius:12px;background:linear-gradient(135deg,var(--cyan),#1D799C);display:grid;place-items:center;font-family:var(--head);font-weight:700;font-size:20px;color:var(--ink);letter-spacing:-.02em;box-shadow:0 0 24px rgba(42,174,224,.35);flex:none}
+  h1{font-family:var(--head);font-weight:700;font-size:28px;letter-spacing:-.02em;line-height:1.1}
+  h1 .accent{color:var(--cyan)}
+  .subline{color:var(--muted);font-size:13px;margin-top:3px}
+  .headright{margin-left:auto;text-align:right;flex:none}
+  .livebadge{display:inline-flex;align-items:center;gap:7px;border:1px solid rgba(42,174,224,.45);border-radius:999px;padding:6px 14px;font-family:var(--head);font-weight:600;font-size:12px;color:var(--cyan)}
+  .livedot{width:7px;height:7px;border-radius:50%;background:var(--cyan);box-shadow:0 0 8px rgba(42,174,224,.8)}
+  .headmeta{color:var(--muted);font-size:12.5px;margin-top:7px}
+  .headmeta b{color:var(--text);font-weight:600}
+
+  .controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px;border-top:1px solid var(--border);border-bottom:1px solid var(--border);padding:12px 2px}
+  .preset{font-family:var(--head);font-weight:600;font-size:12.5px;color:var(--muted);background:transparent;border:1px solid var(--border);border-radius:999px;padding:7px 16px;cursor:pointer;transition:all .15s}
+  .preset:hover{color:var(--text);background:rgba(148,163,184,.08)}
+  .preset[aria-pressed="true"]{color:var(--ink);background:var(--cyan);border-color:var(--cyan)}
+  .controls label{font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:6px}
+  .controls input[type="date"]{background:rgba(5,8,22,.6);border:1px solid #4B5563;color:var(--text);border-radius:10px;padding:6px 9px;font-family:var(--mono);font-size:12px;color-scheme:dark}
+  .controls input[type="date"]:focus{outline:none;border-color:var(--cyan);box-shadow:0 0 0 2px rgba(42,174,224,.25)}
+  .wcount{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--muted)}
+
+  .tiles{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px}
+  .tile{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:16px 18px}
+  .tile.hl{border-color:rgba(42,174,224,.35);box-shadow:0 0 24px rgba(42,174,224,.10)}
+  .tile .k{font-size:11.5px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+  .tile.hl .k{color:var(--cyan)}
+  .tile .v{font-family:var(--mono);font-weight:600;font-size:23px;margin-top:6px}
+  .tile .s{font-size:11.5px;color:var(--muted);margin-top:5px}
+  .up{color:var(--good)} .down{color:var(--bad)}
+
+  .card{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:20px 24px;box-shadow:0 8px 30px rgba(0,0,0,.25)}
+  .cardhead{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .cardhead h2{font-family:var(--head);font-weight:600;font-size:16px}
+  .cardhead .sub{font-size:12px;color:var(--muted)}
+  .legend{margin-left:auto;display:flex;gap:16px;font-size:12px;color:var(--muted);align-items:center}
+  .chip{width:10px;height:10px;border-radius:3px;display:inline-block;margin-right:6px;vertical-align:-1px}
+  .lchip{width:14px;height:2px;display:inline-block;margin-right:6px;vertical-align:3px}
+  .expandbtn{display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(148,163,184,.25);border-radius:999px;padding:6px 13px;font-family:var(--head);font-weight:600;font-size:11.5px;color:var(--muted);background:transparent;cursor:pointer}
+  .expandbtn:hover{color:var(--text);background:rgba(148,163,184,.08)}
+  .chartbox{position:relative;height:320px;margin-top:14px}
+  .card.expanded .chartbox{height:560px}
+
+  .notecard{background:linear-gradient(135deg,rgba(42,174,224,.10),rgba(11,27,38,.6));border:1px solid rgba(42,174,224,.30);border-radius:18px;padding:20px 24px}
+  .notecard .nh{display:flex;align-items:center;gap:12px}
+  .notecard .nh h2{font-family:var(--head);font-weight:600;font-size:15px;color:var(--cyan)}
+  .notecard .byline{margin-left:auto;font-size:12px;color:var(--muted)}
+  .notebody{font-size:14px;line-height:1.7;margin-top:12px;max-width:1080px}
+  .wins{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 22px;margin-top:14px}
+  .win{display:flex;gap:10px;align-items:flex-start;font-size:13.5px;line-height:1.55}
+  .win svg{flex:none;margin-top:2px}
+
+  .markets{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+  .mkt{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:18px 20px}
+  .mkt.expanded{grid-column:1 / -1;border-color:rgba(42,174,224,.30)}
+  .mkt .mh{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  .mkt .mh h3{font-family:var(--head);font-weight:600;font-size:15.5px}
+  .tag{font-family:var(--mono);font-size:10px;color:var(--muted);border:1px solid var(--border);border-radius:999px;padding:2px 8px}
+  .mroas{margin-left:auto;font-family:var(--mono);font-weight:600;font-size:22px;color:var(--cyan)}
+  .mroas small{font-size:11px;font-weight:500}
+  .comment{font-size:12.5px;line-height:1.6;margin-top:10px;padding:10px 12px;background:rgba(42,174,224,.07);border:1px solid rgba(42,174,224,.20);border-radius:10px}
+  .comment b{color:var(--cyan);font-weight:600}
+  .mstats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px 12px;margin-top:12px}
+  .mkt.expanded .mstats{grid-template-columns:repeat(6,minmax(0,1fr))}
+  .ms .k{font-size:10.5px;color:var(--muted)}
+  .ms .v{font-family:var(--mono);font-size:14.5px;margin-top:2px}
+  .ms .d{font-size:10.5px;margin-top:1px;color:var(--muted)}
+  .spark{width:100%;height:46px;margin-top:12px;display:block}
+  .mfoot{font-size:10.5px;color:var(--muted);margin-top:9px;border-top:1px solid rgba(148,163,184,.12);padding-top:8px}
+  .mkt .chartbox{display:none}
+  .mkt.expanded .chartbox{display:block;height:380px}
+  .mkt.expanded .spark{display:none}
+
+  .banner{border:1px solid var(--bad);background:rgba(255,107,107,.08);border-radius:12px;padding:12px 16px;font-size:13px;display:none}
+  .loading{padding:40px;text-align:center;color:var(--muted)}
+  footer{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px;border-top:1px solid var(--border);padding-top:16px;flex-wrap:wrap}
+  footer b{font-family:var(--head);font-weight:600;color:var(--text)}
+  @media (max-width:980px){ .tiles{grid-template-columns:repeat(3,minmax(0,1fr))} .markets{grid-template-columns:1fr} .wins{grid-template-columns:1fr} .wrap{padding:20px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="brandmark">EB</div>
+    <div>
+      <h1>Apollo Scooters <span class="accent">Weekly Performance</span></h1>
+      <div class="subline">Prepared by Elite Brands · Google Ads · All figures CAD · Purchase conversions, counted by conversion time</div>
+    </div>
+    <div class="headright">
+      <span class="livebadge"><span class="livedot"></span>LIVE REPORT</span>
+      <div class="headmeta">Week ending <b id="week-ending">…</b> · updated Wednesdays</div>
+    </div>
+  </header>
+
+  <div id="banner" class="banner"></div>
+
+  <div class="controls">
+    <button class="preset" data-weeks="8" aria-pressed="true">8 weeks</button>
+    <button class="preset" data-weeks="12" aria-pressed="false">12 weeks</button>
+    <button class="preset" data-weeks="26" aria-pressed="false">26 weeks</button>
+    <button class="preset" data-weeks="all" aria-pressed="false">All time</button>
+    <label>From <input type="date" id="d-from"></label>
+    <label>To <input type="date" id="d-to"></label>
+    <span class="wcount" id="wcount"></span>
+  </div>
+
+  <div id="content" class="loading">Loading live data…</div>
+
+  <footer>
+    <b>Elite Brands</b>
+    <span>· Performance Marketing · Data: Google Ads API, purchase conversions counted by conversion time · Questions: reply to your weekly email</span>
+  </footer>
+</div>
+
+<script>
+const SHEET_ID = '1IqcF3hZNmtBlsffVi7y9jToIVGbHyWsDuT6os5wHAt0';
+const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv`;
+const TARGET_ROAS = 12;
+const EXPECTED_HEADERS = [
+  'Week','Date Range',
+  'ALL Spend','ALL Revenue','ALL Purchases','ALL NewCust',
+  'USA Spend','USA Revenue','USA Purchases','USA NewCust',
+  'CAN Spend','CAN Revenue','CAN Purchases','CAN NewCust',
+  'AUS Spend','AUS Revenue','AUS Purchases','AUS NewCust',
+  'DG Spend','DG Revenue','DG Purchases','DG NewCust',
+  'Weekly Note','Win Bullets','Comment USA','Comment CAN','Comment AUS','Comment DG',
+];
+const BUCKETS = [
+  { key:'usa', name:'United States', tag:'EB-USA' },
+  { key:'can', name:'Canada',        tag:'EB-CAN' },
+  { key:'aus', name:'Australia',     tag:'EB-AUS' },
+  { key:'dg',  name:'Demand Gen',    tag:'Awareness' },
+];
+
+// ---- CSV parsing (quote-aware, record-aware; every cell trimmed)
+function parseCSV(text){
+  const recs=[]; let rec=[], cell='', q=false;
+  for(let i=0;i<text.length;i++){
+    const ch=text[i];
+    if(ch==='"'){ if(q && text[i+1]==='"'){ cell+='"'; i++; } else q=!q; }
+    else if(ch===',' && !q){ rec.push(cell); cell=''; }
+    else if((ch==='\n'||ch==='\r') && !q){
+      if(ch==='\r' && text[i+1]==='\n') i++;
+      rec.push(cell); cell='';
+      if(rec.length>1 || rec[0]!=='') recs.push(rec);
+      rec=[];
+    } else cell+=ch;
+  }
+  rec.push(cell);
+  if(rec.length>1 || rec[0]!=='') recs.push(rec);
+  return recs.map(r=>r.map(c=>String(c==null?'':c).trim()));
+}
+// blank cells become null, never 0 (a $0 point beside real weeks reads as a collapse)
+const nullableNum = s => { if(s==null||s==='') return null; const v=parseFloat(String(s).replace(/[,$%\s]/g,'')); return Number.isFinite(v)?v:null; };
+const n0 = v => v==null?0:v;
+
+// ---- formatting
+const fmt$ = v => v==null?'-':'$'+Math.round(v).toLocaleString('en-US');
+const fmt$2 = v => v==null?'-':'$'+v.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0});
+const fmtX = v => v==null?'-':(v).toFixed(1)+'x';
+const fmtI = v => v==null?'-':Math.round(v).toLocaleString('en-US');
+const fmtP = v => v==null?'-':Math.round(v*100)+'%';
+function pctDelta(cur,prev){ if(prev==null||cur==null||prev===0) return null; return (cur-prev)/prev; }
+function deltaSpan(d,goodWhen){ // goodWhen: 'up' | 'down' | 'none'
+  if(d==null) return '';
+  const s=(d>=0?'+':'')+Math.round(d*100)+'%';
+  if(goodWhen==='none') return `<span>(${s})</span>`;
+  const cls=(d>=0)===(goodWhen==='up')?'up':'down';
+  return `<span class="${cls}">(${s})</span>`;
+}
+const shortEnd = label => { // "08/12/2026 - 08/18/2026" -> "Aug 18"
+  const m=label.split(' - ')[1]||''; const [mm,dd]=m.split('/');
+  const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return MON[(+mm)-1]+' '+(+dd);
+};
+const endISO = label => { const m=(label.split(' - ')[1]||'').split('/'); return m.length===3?`${m[2]}-${m[0]}-${m[1]}`:''; };
+const longEnd = label => { const [mm,dd,yy]=(label.split(' - ')[1]||'').split('/'); const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return `${MON[(+mm)-1]} ${+dd}, ${yy}`; };
+
+// ---- data load
+let DATA=null;           // {rows:[{week,label,endISO,all,usa,can,aus,dg}], notes:{...}}
+let charts=[];           // live Chart instances, destroyed on every rebuild
+let state={from:null,to:null};   // ISO end-date bounds
+let expanded={overview:false,usa:false,can:false,aus:false,dg:false};
+
+function bucketFrom(cells,base){
+  return { spend:nullableNum(cells[base]), revenue:nullableNum(cells[base+1]),
+           purchases:nullableNum(cells[base+2]), newcust:nullableNum(cells[base+3]) };
+}
+function showBanner(msg){ const b=document.getElementById('banner'); b.textContent=msg; b.style.display='block'; }
+
+function loadData(text){
+  const recs=parseCSV(text);
+  if(!recs.length){ showBanner('The data sheet came back empty.'); return null; }
+  // positional tripwire: a silently inserted column would shift every metric
+  const hdr=recs[0];
+  for(let i=0;i<EXPECTED_HEADERS.length;i++){
+    if((hdr[i]||'')!==EXPECTED_HEADERS[i]){
+      showBanner(`Data layout changed (column ${i+1} is "${hdr[i]||''}", expected "${EXPECTED_HEADERS[i]}"). Numbers withheld rather than risk showing the wrong ones.`);
+      return null;
+    }
+  }
+  const rows=[];
+  for(const c of recs.slice(1)){
+    if(c.length<22) continue;
+    const week=parseInt(c[0],10);
+    if(!Number.isFinite(week)) continue;
+    rows.push({
+      week, label:c[1], endISO:endISO(c[1]),
+      all:bucketFrom(c,2), usa:bucketFrom(c,6), can:bucketFrom(c,10),
+      aus:bucketFrom(c,14), dg:bucketFrom(c,18),
+      note:c[22]||'', bullets:c[23]||'', comments:{usa:c[24]||'',can:c[25]||'',aus:c[26]||'',dg:c[27]||''},
+    });
+  }
+  rows.sort((a,b)=>a.week-b.week);
+  return rows;
+}
+
+// ---- window stats: ratios are sum/sum over the window, never averaged ratios
+const sumN=a=>a.reduce((s,v)=>s+(v||0),0);
+function windowStats(rows,bucket){
+  const spend=sumN(rows.map(r=>r[bucket].spend)), rev=sumN(rows.map(r=>r[bucket].revenue));
+  const pur=sumN(rows.map(r=>r[bucket].purchases)), nc=sumN(rows.map(r=>r[bucket].newcust));
+  return { spend, rev, pur, nc,
+    roas: spend>0?rev/spend:null, cpa: pur>0?spend/pur:null, ncPct: pur>0?nc/pur:null };
+}
+
+// ---- charts
+function niceMax(v){ if(!(v>0)) return 1; const p=Math.pow(10,Math.floor(Math.log10(v))); const n=v/p; const m=[1,1.2,1.5,2,2.5,3,4,5,6,8,10].find(s=>n<=s); return m*p; }
+function makePerfChart(canvas, rows, bucket){
+  const labels=rows.map(r=>shortEnd(r.label));
+  const spend=rows.map(r=>r[bucket].spend);
+  const rev=rows.map(r=>r[bucket].revenue);
+  const roas=rows.map(r=>{ const s=r[bucket].spend, v=r[bucket].revenue; return (s!=null&&s>0&&v!=null)?v/s:null; });
+  let revMax=niceMax(Math.max(...rev.map(n0),1));
+  const spendMaxData=Math.max(...spend.map(n0),0);
+  if(spendMaxData>revMax/TARGET_ROAS) revMax=niceMax(spendMaxData*TARGET_ROAS);  // no-clip guard
+  const roasMax=Math.max(16, Math.ceil(Math.max(...roas.map(n0),0)/4)*4);
+  const chart=new Chart(canvas,{
+    data:{ labels, datasets:[
+      { type:'bar', label:'Spend', data:spend, backgroundColor:'rgba(42,174,224,0.45)', borderRadius:4, yAxisID:'ySpend', order:3 },
+      { type:'line', label:'Revenue', data:rev, borderColor:'#E5E9F0', backgroundColor:'#E5E9F0', borderWidth:2.5, pointRadius:3, pointHoverRadius:5, tension:.25, spanGaps:false, yAxisID:'yRev', order:1 },
+      { type:'line', label:'ROAS', data:roas, borderColor:'#C98500', backgroundColor:'#C98500', borderWidth:2, borderDash:[6,4], pointRadius:2.5, pointHoverRadius:5, tension:.25, spanGaps:false, yAxisID:'yRoas', order:2 },
+      { type:'line', label:'__target', data:labels.map(()=>TARGET_ROAS), borderColor:'rgba(201,133,0,0.45)', borderWidth:1, borderDash:[3,5], pointRadius:0, pointHitRadius:0, yAxisID:'yRoas', order:4 },
+    ]},
+    options:{
+      responsive:true, maintainAspectRatio:false, animation:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{display:false},
+        tooltip:{
+          backgroundColor:'#050816', borderColor:'rgba(42,174,224,0.5)', borderWidth:1,
+          titleFont:{family:'Space Grotesk'}, bodyFont:{family:'JetBrains Mono'}, padding:12,
+          filter:i=>i.dataset.label!=='__target',
+          itemSort:(a,b)=>a.dataset.order-b.dataset.order,
+          callbacks:{
+            title:items=>{ const r=rows[items[0].dataIndex]; return r?'Week ending '+longEnd(r.label):''; },
+            label:ctx=>{
+              const v=ctx.parsed.y;
+              if(v==null||!Number.isFinite(v)) return ctx.dataset.label+': no data';  // null guard FIRST
+              if(ctx.dataset.label==='ROAS') return 'ROAS '+v.toFixed(1)+'x';
+              return ctx.dataset.label+' $'+Math.round(v).toLocaleString('en-US');
+            },
+          },
+        },
+      },
+      scales:{
+        x:{ grid:{color:'rgba(148,163,184,0.08)'}, ticks:{color:'#9CA3AF',font:{family:'JetBrains Mono',size:10},maxRotation:60,autoSkip:true} },
+        yRev:{ position:'left', min:0, max:revMax, grid:{color:'rgba(148,163,184,0.12)'}, ticks:{color:'#9CA3AF',font:{family:'JetBrains Mono',size:10},callback:v=>'$'+(v>=1000?(v/1000)+'k':v)} },
+        ySpend:{ position:'right', min:0, max:revMax/TARGET_ROAS, display:false },   // ratio lock: bar meets revenue line at exactly 12.0x
+        yRoas:{ position:'right', min:0, max:roasMax, grid:{drawOnChartArea:false}, ticks:{color:'#C98500',font:{family:'JetBrains Mono',size:10},callback:v=>v+'x'} },
+      },
+    },
+  });
+  charts.push(chart);
+  return chart;
+}
+function sparkSVG(vals){
+  const w=130,h=50,n=vals.length; if(!n) return '';
+  const max=Math.max(...vals.map(n0),1);
+  const step=(w-4)/n;
+  const gap=Math.min(3,step*0.25);
+  const barW=Math.max(0.8,step-gap);           // never negative, even at 64+ weeks
+  let rects='';
+  vals.forEach((v,i)=>{
+    const bh=Math.max(2,Math.round(n0(v)/max*(h-2)));
+    rects+=`<rect x="${(2+i*step).toFixed(1)}" y="${h-bh}" width="${barW.toFixed(1)}" height="${bh}" rx="${barW>3?2:0}"></rect>`;
+  });
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><g fill="rgba(42,174,224,0.55)">${rects}</g></svg>`;
+}
+
+// ---- rendering
+function statCell(k,v,d){ return `<div class="ms"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d||''}</div></div>`; }
+
+function render(){
+  const rowsAll=DATA;
+  const rows=rowsAll.filter(r=>(!state.from||r.endISO>=state.from)&&(!state.to||r.endISO<=state.to));
+  document.getElementById('wcount').textContent=`${rows.length} of ${rowsAll.length} weeks`;
+  const el=document.getElementById('content');
+  if(!rows.length){ el.className='loading'; el.textContent='No weeks in this date range.'; return; }
+
+  charts.forEach(c=>c.destroy()); charts=[];
+  const latest=rows[rows.length-1], prev=rows.length>1?rows[rows.length-2]:null;
+  const latestAll=rowsAll[rowsAll.length-1];
+  document.getElementById('week-ending').textContent=longEnd(latest.label);
+
+  const W=windowStats(rows,'all');
+  const wk=latest.all, pv=prev?prev.all:null;
+  const wkRoas=wk.spend>0?wk.revenue/wk.spend:null;
+  const wkCpa=wk.purchases>0?wk.spend/wk.purchases:null;
+  const wkNc=wk.purchases>0?wk.newcust/wk.purchases:null;
+
+  // notes live on the newest row overall (not the filtered window)
+  const note=latestAll.note, bullets=latestAll.bullets?latestAll.bullets.split(' | ').filter(Boolean):[];
+  const check='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3fd68f" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>';
+  const chevron=o=>o?'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"></path></svg>'
+                   :'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg>';
+
+  let html='';
+  html+=`<div class="tiles">
+    <div class="tile"><div class="k">Ad Spend</div><div class="v">${fmt$(W.spend)}</div><div class="s">this week ${fmt$(wk.spend)} ${deltaSpan(pctDelta(wk.spend,pv&&pv.spend),'none')}</div></div>
+    <div class="tile hl"><div class="k">Revenue</div><div class="v">${fmt$(W.rev)}</div><div class="s">this week ${fmt$(wk.revenue)} ${deltaSpan(pctDelta(wk.revenue,pv&&pv.revenue),'up')}</div></div>
+    <div class="tile"><div class="k">ROAS</div><div class="v">${fmtX(W.roas)}</div><div class="s">this week ${fmtX(wkRoas)} · target ${TARGET_ROAS.toFixed(1)}x</div></div>
+    <div class="tile"><div class="k">Purchases</div><div class="v">${fmtI(W.pur)}</div><div class="s">this week ${fmtI(wk.purchases)} ${deltaSpan(pctDelta(wk.purchases,pv&&pv.purchases),'up')}</div></div>
+    <div class="tile"><div class="k">Cost / Purchase</div><div class="v">${W.cpa==null?'-':'$'+Math.round(W.cpa)}</div><div class="s">this week ${wkCpa==null?'-':'$'+Math.round(wkCpa)} ${deltaSpan(pctDelta(wkCpa,pv&&pv.purchases>0?pv.spend/pv.purchases:null),'down')}</div></div>
+    <div class="tile"><div class="k">New Customers</div><div class="v">${fmtP(W.ncPct)}</div><div class="s">this week ${fmtP(wkNc)} of purchases</div></div>
+  </div>`;
+
+  html+=`<div class="card ${expanded.overview?'expanded':''}" id="card-overview">
+    <div class="cardhead">
+      <div><h2>Revenue, Spend and ROAS · all markets</h2>
+      <div class="sub">hover any week for exact values · spend bar meets the revenue line at exactly ${TARGET_ROAS.toFixed(1)}x</div></div>
+      <div class="legend">
+        <span><span class="chip" style="background:rgba(42,174,224,.55)"></span>Spend</span>
+        <span><span class="lchip" style="background:#E5E9F0"></span>Revenue</span>
+        <span><span class="lchip" style="border-top:2px dashed #C98500"></span>ROAS</span>
+      </div>
+      <button class="expandbtn" data-expand="overview">${expanded.overview?'Collapse':'Expand'} ${chevron(expanded.overview)}</button>
+    </div>
+    <div class="chartbox"><canvas id="chart-overview"></canvas></div>
+  </div>`;
+
+  if(note){
+    html+=`<div class="notecard">
+      <div class="nh">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2AAEE0" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+        <h2>This week from your strategist</h2>
+        <span class="byline">Glen Wilson · Elite Brands · week ending ${longEnd(latestAll.label)}</span>
+      </div>
+      <div class="notebody">${note}</div>
+      ${bullets.length?`<div class="wins">${bullets.map(b=>`<div class="win">${check}<div>${b}</div></div>`).join('')}</div>`:''}
+    </div>`;
+  }
+
+  html+='<div class="markets">';
+  for(const B of BUCKETS){
+    const mW=windowStats(rows,B.key);
+    const m=latest[B.key], mp=prev?prev[B.key]:null;
+    const mRoas=m.spend>0?m.revenue/m.spend:null;
+    const mpRoas=mp&&mp.spend>0?mp.revenue/mp.spend:null;
+    const mCpa=m.purchases>0?m.spend/m.purchases:null;
+    const dRoas=(mRoas!=null&&mpRoas!=null)?mRoas-mpRoas:null;
+    const isX=expanded[B.key];
+    const comment=latestAll.comments[B.key];
+    const mNc=m.purchases>0?m.newcust/m.purchases:null;
+    html+=`<div class="mkt ${isX?'expanded':''}" id="card-${B.key}">
+      <div class="mh">
+        <h3>${B.name}</h3><span class="tag">${B.tag}</span>
+        <span class="mroas">${fmtX(mRoas)} <small class="${dRoas==null?'':(dRoas>=0?'up':'down')}">${dRoas==null?'':(dRoas>=0?'+':'')+dRoas.toFixed(1)+' WoW'}</small></span>
+        <button class="expandbtn" data-expand="${B.key}">${isX?'Collapse':'Expand'} ${chevron(isX)}</button>
+      </div>
+      ${comment?`<div class="comment"><b>Strategist:</b> ${comment}</div>`:''}
+      <div class="mstats">
+        ${statCell('Spend',fmt$(m.spend),deltaSpan(pctDelta(m.spend,mp&&mp.spend),'none'))}
+        ${statCell('Revenue',fmt$(m.revenue),deltaSpan(pctDelta(m.revenue,mp&&mp.revenue),'up'))}
+        ${statCell('Purchases',fmtI(m.purchases),deltaSpan(pctDelta(m.purchases,mp&&mp.purchases),'up'))}
+        ${statCell('Cost / Purchase',mCpa==null?'-':'$'+Math.round(mCpa),deltaSpan(pctDelta(mCpa,mp&&mp.purchases>0?mp.spend/mp.purchases:null),'down'))}
+        ${isX?statCell('ROAS 8-wk basis',fmtX(mW.roas),'window'):''}
+        ${isX?statCell('New Customers',fmtP(mNc),'this week'):''}
+      </div>
+      ${sparkSVG(rows.map(r=>r[B.key].revenue))}
+      <div class="chartbox"><canvas id="chart-${B.key}"></canvas></div>
+      <div class="mfoot">${rows.length}-week window: ${fmt$(mW.spend)} spend · ${fmt$(mW.rev)} revenue · ${fmtX(mW.roas)}${B.key==='aus'?' · small volumes swing weekly':''}${B.key==='dg'?' · awareness channel, volatile by nature':''}</div>
+    </div>`;
+  }
+  html+='</div>';
+
+  el.className=''; el.innerHTML=html;
+
+  makePerfChart(document.getElementById('chart-overview'),rows,'all');
+  for(const B of BUCKETS) if(expanded[B.key]) makePerfChart(document.getElementById('chart-'+B.key),rows,B.key);
+
+  el.querySelectorAll('[data-expand]').forEach(btn=>{
+    btn.addEventListener('click',()=>{ const k=btn.getAttribute('data-expand'); expanded[k]=!expanded[k]; render(); });
+  });
+}
+
+// ---- filters
+function setWindow(weeks){
+  const rows=DATA; if(!rows.length) return;
+  const to=rows[rows.length-1].endISO;
+  const from=weeks==='all'?rows[0].endISO:(rows[Math.max(0,rows.length-weeks)]||rows[0]).endISO;
+  state={from,to};
+  document.getElementById('d-from').value=from;
+  document.getElementById('d-to').value=to;
+}
+function wireControls(){
+  document.querySelectorAll('.preset').forEach(b=>{
+    b.addEventListener('click',()=>{
+      document.querySelectorAll('.preset').forEach(x=>x.setAttribute('aria-pressed','false'));
+      b.setAttribute('aria-pressed','true');
+      const w=b.getAttribute('data-weeks');
+      setWindow(w==='all'?'all':parseInt(w,10));
+      render();
+    });
+  });
+  const onDate=()=>{
+    document.querySelectorAll('.preset').forEach(x=>x.setAttribute('aria-pressed','false'));
+    state={from:document.getElementById('d-from').value||null,to:document.getElementById('d-to').value||null};
+    render();
+  };
+  document.getElementById('d-from').addEventListener('change',onDate);
+  document.getElementById('d-to').addEventListener('change',onDate);
+}
+
+// test hook for tools/render-sim.cjs (harmless in production)
+window.__apollo={ parseCSV, loadData, windowStats, makePerfChart, sparkSVG, render, setWindow,
+  get data(){return DATA;}, set data(v){DATA=v;},
+  get state(){return state;}, set state(v){state=v;},
+  get expanded(){return expanded;},
+  get charts(){return charts;} };
+
+fetch(CSV_URL)
+  .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.text(); })
+  .then(t=>{
+    const rows=loadData(t);
+    if(!rows) { document.getElementById('content').textContent=''; return; }
+    if(!rows.length){ document.getElementById('content').textContent='No data rows yet.'; return; }
+    DATA=rows;
+    wireControls();
+    setWindow(8);
+    render();
+  })
+  .catch(e=>{
+    document.getElementById('content').className='loading';
+    document.getElementById('content').textContent='Failed to load data ('+e.message+'). Refresh to retry.';
+  });
+</script>
+</body>
+</html>
