@@ -23,7 +23,7 @@
   .wrap{max-width:1280px;margin:0 auto;padding:36px 44px 28px;display:flex;flex-direction:column;gap:22px;background-image:radial-gradient(ellipse 900px 420px at 75% -10%,rgba(42,174,224,.14),transparent 60%)}
   a{color:var(--cyan)} a:hover{color:#2393BE}
 
-  header{display:flex;align-items:center;gap:16px}
+  header{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
   .brandmark{width:46px;height:46px;border-radius:12px;background:linear-gradient(135deg,var(--cyan),#1D799C);display:grid;place-items:center;font-family:var(--head);font-weight:700;font-size:20px;color:var(--ink);letter-spacing:-.02em;box-shadow:0 0 24px rgba(42,174,224,.35);flex:none}
   h1{font-family:var(--head);font-weight:700;font-size:28px;letter-spacing:-.02em;line-height:1.1}
   h1 .accent{color:var(--cyan)}
@@ -99,6 +99,14 @@
   footer{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px;border-top:1px solid var(--border);padding-top:16px;flex-wrap:wrap}
   footer b{font-family:var(--head);font-weight:600;color:var(--text)}
   @media (max-width:980px){ .tiles{grid-template-columns:repeat(3,minmax(0,1fr))} .markets{grid-template-columns:1fr} .wins{grid-template-columns:1fr} .wrap{padding:20px} }
+  @media (max-width:600px){
+    header{flex-wrap:wrap}
+    .headright{margin-left:0;text-align:left;flex:1 1 100%}
+    h1{font-size:22px}
+    .tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .tile .v{font-size:19px}
+    .mkt.expanded .mstats{grid-template-columns:repeat(3,minmax(0,1fr))}
+  }
 </style>
 </head>
 <body>
@@ -116,9 +124,9 @@
     </div>
   </header>
 
-  <div id="banner" class="banner"></div>
+  <div id="banner" class="banner" role="alert"></div>
 
-  <div class="controls">
+  <div class="controls" id="controls" style="visibility:hidden">
     <button class="preset" data-weeks="8" aria-pressed="true">8 weeks</button>
     <button class="preset" data-weeks="12" aria-pressed="false">12 weeks</button>
     <button class="preset" data-weeks="26" aria-pressed="false">26 weeks</button>
@@ -137,9 +145,9 @@
 </div>
 
 <script>
-const SHEET_ID = '1IqcF3hZNmtBlsffVi7y9jToIVGbHyWsDuT6os5wHAt0';
-const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv`;
-const TARGET_ROAS = 12;
+const SHEET_ID = '1IqcF3hZNmtBlsffVi7y9jToIVGbHyWsDuT6os5wHAt0';   // config.json dashboard_sheet_id
+const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Sheet1`;
+const TARGET_ROAS = 12;   // keep in sync with clients/apollo-scooters/config.json target_roas
 const EXPECTED_HEADERS = [
   'Week','Date Range',
   'ALL Spend','ALL Revenue','ALL Purchases','ALL NewCust',
@@ -179,8 +187,8 @@ const nullableNum = s => { if(s==null||s==='') return null; const v=parseFloat(S
 const n0 = v => v==null?0:v;
 
 // ---- formatting
+const esc = s => String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 const fmt$ = v => v==null?'-':'$'+Math.round(v).toLocaleString('en-US');
-const fmt$2 = v => v==null?'-':'$'+v.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0});
 const fmtX = v => v==null?'-':(v).toFixed(1)+'x';
 const fmtI = v => v==null?'-':Math.round(v).toLocaleString('en-US');
 const fmtP = v => v==null?'-':Math.round(v*100)+'%';
@@ -192,10 +200,10 @@ function deltaSpan(d,goodWhen){ // goodWhen: 'up' | 'down' | 'none'
   const cls=(d>=0)===(goodWhen==='up')?'up':'down';
   return `<span class="${cls}">(${s})</span>`;
 }
-const shortEnd = label => { // "08/12/2026 - 08/18/2026" -> "Aug 18"
-  const m=label.split(' - ')[1]||''; const [mm,dd]=m.split('/');
+const shortEnd = (label,withYear) => { // "08/12/2026 - 08/18/2026" -> "Aug 18" (or "Aug 18 '26")
+  const m=label.split(' - ')[1]||''; const [mm,dd,yy]=m.split('/');
   const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  return MON[(+mm)-1]+' '+(+dd);
+  return MON[(+mm)-1]+' '+(+dd)+(withYear&&yy?" '"+yy.slice(2):'');
 };
 const endISO = label => { const m=(label.split(' - ')[1]||'').split('/'); return m.length===3?`${m[2]}-${m[0]}-${m[1]}`:''; };
 const longEnd = label => { const [mm,dd,yy]=(label.split(' - ')[1]||'').split('/'); const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return `${MON[(+mm)-1]} ${+dd}, ${yy}`; };
@@ -204,7 +212,7 @@ const longEnd = label => { const [mm,dd,yy]=(label.split(' - ')[1]||'').split('/
 let DATA=null;           // {rows:[{week,label,endISO,all,usa,can,aus,dg}], notes:{...}}
 let charts=[];           // live Chart instances, destroyed on every rebuild
 let state={from:null,to:null};   // ISO end-date bounds
-let expanded={overview:false,usa:false,can:false,aus:false,dg:false};
+let expanded={overview:false,usa:true,can:false,aus:false,dg:false};   // lead market open, per approved mock
 
 function bucketFrom(cells,base){
   return { spend:nullableNum(cells[base]), revenue:nullableNum(cells[base+1]),
@@ -213,21 +221,39 @@ function bucketFrom(cells,base){
 function showBanner(msg){ const b=document.getElementById('banner'); b.textContent=msg; b.style.display='block'; }
 
 function loadData(text){
+  if(/^\s*</.test(text)){ // an HTML body means the data feed is not reachable, not malformed
+    showBanner('The live data feed is not reachable right now, so figures are hidden. If this lasts more than a few minutes, please let your Elite Brands team know.');
+    console.error('gviz endpoint returned HTML instead of CSV (sheet unshared, deleted, or blocked).');
+    return null;
+  }
   const recs=parseCSV(text);
-  if(!recs.length){ showBanner('The data sheet came back empty.'); return null; }
+  if(!recs.length){
+    showBanner('The live data feed came back empty, so figures are hidden. If this lasts, please let your Elite Brands team know.');
+    console.error('gviz endpoint returned an empty body.');
+    return null;
+  }
   // positional tripwire: a silently inserted column would shift every metric
   const hdr=recs[0];
   for(let i=0;i<EXPECTED_HEADERS.length;i++){
     if((hdr[i]||'')!==EXPECTED_HEADERS[i]){
-      showBanner(`Data layout changed (column ${i+1} is "${hdr[i]||''}", expected "${EXPECTED_HEADERS[i]}"). Numbers withheld rather than risk showing the wrong ones.`);
+      showBanner('This report\'s data feed needs attention, so figures are hidden rather than risk showing the wrong numbers. Please let your Elite Brands team know.');
+      console.error(`Header tripwire: column ${i+1} is "${hdr[i]||''}", expected "${EXPECTED_HEADERS[i]}". A column was probably inserted in the sheet.`);
       return null;
     }
   }
   const rows=[];
+  const seenWeeks=new Set();
   for(const c of recs.slice(1)){
     if(c.length<22) continue;
     const week=parseInt(c[0],10);
     if(!Number.isFinite(week)) continue;
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(endISO(c[1]))){ console.warn(`row for week ${week} skipped: unreadable date range "${c[1]}"`); continue; }
+    if(seenWeeks.has(week)){
+      showBanner('This report\'s data feed needs attention (a week appears twice), so figures are hidden. Please let your Elite Brands team know.');
+      console.error(`Duplicate week number ${week} in the sheet - totals would double-count.`);
+      return null;
+    }
+    seenWeeks.add(week);
     rows.push({
       week, label:c[1], endISO:endISO(c[1]),
       all:bucketFrom(c,2), usa:bucketFrom(c,6), can:bucketFrom(c,10),
@@ -251,7 +277,8 @@ function windowStats(rows,bucket){
 // ---- charts
 function niceMax(v){ if(!(v>0)) return 1; const p=Math.pow(10,Math.floor(Math.log10(v))); const n=v/p; const m=[1,1.2,1.5,2,2.5,3,4,5,6,8,10].find(s=>n<=s); return m*p; }
 function makePerfChart(canvas, rows, bucket){
-  const labels=rows.map(r=>shortEnd(r.label));
+  const withYear=rows.length>52;                       // "All time" spans years; label them
+  const labels=rows.map(r=>shortEnd(r.label,withYear));
   const spend=rows.map(r=>r[bucket].spend);
   const rev=rows.map(r=>r[bucket].revenue);
   const roas=rows.map(r=>{ const s=r[bucket].spend, v=r[bucket].revenue; return (s!=null&&s>0&&v!=null)?v/s:null; });
@@ -275,7 +302,7 @@ function makePerfChart(canvas, rows, bucket){
           backgroundColor:'#050816', borderColor:'rgba(42,174,224,0.5)', borderWidth:1,
           titleFont:{family:'Space Grotesk'}, bodyFont:{family:'JetBrains Mono'}, padding:12,
           filter:i=>i.dataset.label!=='__target',
-          itemSort:(a,b)=>a.dataset.order-b.dataset.order,
+          itemSort:(a,b)=>{ const o={Spend:0,Revenue:1,ROAS:2}; return (o[a.dataset.label]??9)-(o[b.dataset.label]??9); },
           callbacks:{
             title:items=>{ const r=rows[items[0].dataIndex]; return r?'Week ending '+longEnd(r.label):''; },
             label:ctx=>{
@@ -318,23 +345,33 @@ function statCell(k,v,d){ return `<div class="ms"><div class="k">${k}</div><div 
 function render(){
   const rowsAll=DATA;
   const rows=rowsAll.filter(r=>(!state.from||r.endISO>=state.from)&&(!state.to||r.endISO<=state.to));
-  document.getElementById('wcount').textContent=`${rows.length} of ${rowsAll.length} weeks`;
   const el=document.getElementById('content');
-  if(!rows.length){ el.className='loading'; el.textContent='No weeks in this date range.'; return; }
-
   charts.forEach(c=>c.destroy()); charts=[];
-  const latest=rows[rows.length-1], prev=rows.length>1?rows[rows.length-2]:null;
+  if(!rows.length){
+    document.getElementById('wcount').textContent=`0 of ${rowsAll.length} weeks`;
+    el.className='loading'; el.textContent='No weeks in this date range.'; return;
+  }
+  document.getElementById('wcount').textContent=
+    `${shortEnd(rows[0].label,true)} to ${shortEnd(rows[rows.length-1].label,true)} · ${rows.length} of ${rowsAll.length} weeks`;
+
+  const latest=rows[rows.length-1];
+  // WoW deltas only against the IMMEDIATELY prior week - a gap makes "WoW" a lie
+  const prevRow=rows.length>1?rows[rows.length-2]:null;
+  const prev=(prevRow&&prevRow.week===latest.week-1)?prevRow:null;
   const latestAll=rowsAll[rowsAll.length-1];
-  document.getElementById('week-ending').textContent=longEnd(latest.label);
+  document.getElementById('week-ending').textContent=longEnd(latestAll.label);
 
   const W=windowStats(rows,'all');
   const wk=latest.all, pv=prev?prev.all:null;
-  const wkRoas=wk.spend>0?wk.revenue/wk.spend:null;
+  const wkRoas=(wk.spend>0&&wk.revenue!=null)?wk.revenue/wk.spend:null;
   const wkCpa=wk.purchases>0?wk.spend/wk.purchases:null;
-  const wkNc=wk.purchases>0?wk.newcust/wk.purchases:null;
+  const wkNc=(wk.purchases>0&&wk.newcust!=null)?wk.newcust/wk.purchases:null;
 
-  // notes live on the newest row overall (not the filtered window)
-  const note=latestAll.note, bullets=latestAll.bullets?latestAll.bullets.split(' | ').filter(Boolean):[];
+  // notes live on the newest row overall; show them ONLY when the window actually
+  // ends at that week - current-week commentary above old-week numbers would mislead
+  const commentaryOn=latest.week===latestAll.week;
+  const note=commentaryOn?esc(latestAll.note):'';
+  const bullets=(commentaryOn&&latestAll.bullets)?latestAll.bullets.split(' | ').filter(Boolean).map(esc):[];
   const check='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3fd68f" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>';
   const chevron=o=>o?'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"></path></svg>'
                    :'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg>';
@@ -352,25 +389,26 @@ function render(){
   html+=`<div class="card ${expanded.overview?'expanded':''}" id="card-overview">
     <div class="cardhead">
       <div><h2>Revenue, Spend and ROAS · all markets</h2>
-      <div class="sub">hover any week for exact values · spend bar meets the revenue line at exactly ${TARGET_ROAS.toFixed(1)}x</div></div>
+      <div class="sub">tap or hover any week for exact values · spend bar meets the revenue line at exactly ${TARGET_ROAS.toFixed(1)}x</div></div>
       <div class="legend">
         <span><span class="chip" style="background:rgba(42,174,224,.55)"></span>Spend</span>
         <span><span class="lchip" style="background:#E5E9F0"></span>Revenue</span>
         <span><span class="lchip" style="border-top:2px dashed #C98500"></span>ROAS</span>
+        <span><span class="lchip" style="border-top:1px dashed rgba(201,133,0,.6)"></span>${TARGET_ROAS.toFixed(1)}x target</span>
       </div>
-      <button class="expandbtn" data-expand="overview">${expanded.overview?'Collapse':'Expand'} ${chevron(expanded.overview)}</button>
+      <button class="expandbtn" data-expand="overview" aria-expanded="${expanded.overview}">${expanded.overview?'Collapse':'Expand'} ${chevron(expanded.overview)}</button>
     </div>
-    <div class="chartbox"><canvas id="chart-overview"></canvas></div>
+    <div class="chartbox"><canvas id="chart-overview" role="img" aria-label="Weekly revenue, spend and ROAS chart, all markets"></canvas></div>
   </div>`;
 
-  if(note){
+  if(note||bullets.length){
     html+=`<div class="notecard">
       <div class="nh">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2AAEE0" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
         <h2>This week from your strategist</h2>
         <span class="byline">Glen Wilson · Elite Brands · week ending ${longEnd(latestAll.label)}</span>
       </div>
-      <div class="notebody">${note}</div>
+      ${note?`<div class="notebody">${note}</div>`:''}
       ${bullets.length?`<div class="wins">${bullets.map(b=>`<div class="win">${check}<div>${b}</div></div>`).join('')}</div>`:''}
     </div>`;
   }
@@ -379,18 +417,18 @@ function render(){
   for(const B of BUCKETS){
     const mW=windowStats(rows,B.key);
     const m=latest[B.key], mp=prev?prev[B.key]:null;
-    const mRoas=m.spend>0?m.revenue/m.spend:null;
-    const mpRoas=mp&&mp.spend>0?mp.revenue/mp.spend:null;
+    const mRoas=(m.spend>0&&m.revenue!=null)?m.revenue/m.spend:null;
+    const mpRoas=(mp&&mp.spend>0&&mp.revenue!=null)?mp.revenue/mp.spend:null;
     const mCpa=m.purchases>0?m.spend/m.purchases:null;
     const dRoas=(mRoas!=null&&mpRoas!=null)?mRoas-mpRoas:null;
     const isX=expanded[B.key];
-    const comment=latestAll.comments[B.key];
-    const mNc=m.purchases>0?m.newcust/m.purchases:null;
+    const comment=commentaryOn?esc(latestAll.comments[B.key]):'';
+    const mNc=(m.purchases>0&&m.newcust!=null)?m.newcust/m.purchases:null;
     html+=`<div class="mkt ${isX?'expanded':''}" id="card-${B.key}">
       <div class="mh">
         <h3>${B.name}</h3><span class="tag">${B.tag}</span>
         <span class="mroas">${fmtX(mRoas)} <small class="${dRoas==null?'':(dRoas>=0?'up':'down')}">${dRoas==null?'':(dRoas>=0?'+':'')+dRoas.toFixed(1)+' WoW'}</small></span>
-        <button class="expandbtn" data-expand="${B.key}">${isX?'Collapse':'Expand'} ${chevron(isX)}</button>
+        <button class="expandbtn" data-expand="${B.key}" aria-expanded="${isX}">${isX?'Collapse':'Expand'} ${chevron(isX)}</button>
       </div>
       ${comment?`<div class="comment"><b>Strategist:</b> ${comment}</div>`:''}
       <div class="mstats">
@@ -398,11 +436,11 @@ function render(){
         ${statCell('Revenue',fmt$(m.revenue),deltaSpan(pctDelta(m.revenue,mp&&mp.revenue),'up'))}
         ${statCell('Purchases',fmtI(m.purchases),deltaSpan(pctDelta(m.purchases,mp&&mp.purchases),'up'))}
         ${statCell('Cost / Purchase',mCpa==null?'-':'$'+Math.round(mCpa),deltaSpan(pctDelta(mCpa,mp&&mp.purchases>0?mp.spend/mp.purchases:null),'down'))}
-        ${isX?statCell('ROAS 8-wk basis',fmtX(mW.roas),'window'):''}
+        ${isX?statCell('ROAS '+rows.length+'-wk',fmtX(mW.roas),'selected period'):''}
         ${isX?statCell('New Customers',fmtP(mNc),'this week'):''}
       </div>
       ${sparkSVG(rows.map(r=>r[B.key].revenue))}
-      <div class="chartbox"><canvas id="chart-${B.key}"></canvas></div>
+      <div class="chartbox"><canvas id="chart-${B.key}" role="img" aria-label="${B.name} weekly revenue, spend and ROAS chart"></canvas></div>
       <div class="mfoot">${rows.length}-week window: ${fmt$(mW.spend)} spend · ${fmt$(mW.rev)} revenue · ${fmtX(mW.roas)}${B.key==='aus'?' · small volumes swing weekly':''}${B.key==='dg'?' · awareness channel, volatile by nature':''}</div>
     </div>`;
   }
@@ -457,16 +495,23 @@ fetch(CSV_URL)
   .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.text(); })
   .then(t=>{
     const rows=loadData(t);
-    if(!rows) { document.getElementById('content').textContent=''; return; }
-    if(!rows.length){ document.getElementById('content').textContent='No data rows yet.'; return; }
+    const content=document.getElementById('content');
+    if(!rows) { content.textContent=''; document.getElementById('week-ending').textContent='-'; return; }
+    if(!rows.length){ content.textContent='No data rows yet.'; document.getElementById('week-ending').textContent='-'; return; }
     DATA=rows;
+    const dFrom=document.getElementById('d-from'), dTo=document.getElementById('d-to');
+    dFrom.min=rows[0].endISO; dFrom.max=rows[rows.length-1].endISO;
+    dTo.min=rows[0].endISO;   dTo.max=rows[rows.length-1].endISO;
     wireControls();
     setWindow(8);
     render();
+    document.getElementById('controls').style.visibility='visible';   // only after a successful first render
   })
   .catch(e=>{
+    console.error(e);
+    document.getElementById('week-ending').textContent='-';
     document.getElementById('content').className='loading';
-    document.getElementById('content').textContent='Failed to load data ('+e.message+'). Refresh to retry.';
+    document.getElementById('content').textContent='We could not load the latest data. Please refresh to try again.';
   });
 </script>
 </body>

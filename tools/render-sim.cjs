@@ -121,10 +121,15 @@ async function main() {
 
   const sheetId = (code.match(/SHEET_ID\s*=\s*'([^']+)'/) || [])[1];
   check('SHEET_ID present', !!sheetId);
+  // fetch EXACTLY the URL the page fetches (tab pin included) - certifying any
+  // other byte-stream would let page/sim drift apart
+  const urlExpr = (code.match(/CSV_URL\s*=\s*`([^`]+)`/) || [])[1];
+  check('CSV_URL present and pinned to Sheet1', !!urlExpr && urlExpr.includes('&sheet=Sheet1'));
+  const csvUrl = urlExpr ? urlExpr.replace('${SHEET_ID}', sheetId) : `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=Sheet1`;
 
   const csv = LOCAL_CSV
     ? fs.readFileSync(LOCAL_CSV, 'utf8')
-    : await fetchCSV(`https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv`);
+    : await fetchCSV(csvUrl);
 
   // ---------------- boot against the real CSV
   section('boot + parse (real CSV)');
@@ -152,11 +157,13 @@ async function main() {
   check('revenue matches independent sum', Math.abs(W.rev - iRev) < 0.01);
   check('ROAS is sum(rev)/sum(spend)', Math.abs(W.roas - iRev / iSpend) < 1e-9);
   check('CPA is sum(spend)/sum(purchases)', Math.abs(W.cpa - iSpend / iPur) < 1e-9);
-  const avgOfRatios = last8.reduce((s, r) => s + parseFloat(r[3]) / parseFloat(r[2]), 0) / 8;
+  const avgOfRatios = last8.reduce((s, r) => s + parseFloat(r[3]) / parseFloat(r[2]), 0) / last8.length;
   check('sum/sum differs from avg-of-ratios on real data (guard is meaningful)', Math.abs(avgOfRatios - W.roas) > 1e-6);
 
   // ---------------- charts
   section('charts');
+  check('USA card expanded by default (approved mock)', A.expanded.usa === true);
+  for (const k of ['overview', 'usa', 'can', 'aus', 'dg']) A.expanded[k] = false;
   A.setWindow(8); A.render();
   const live = createdCharts.filter(c => !c.destroyed);
   check('exactly 1 chart when nothing expanded', live.length === 1, `got ${live.length}`);
@@ -215,7 +222,7 @@ async function main() {
   {
     const recs = indieRows(csv);
     const lastIdx = recs.length - 1;
-    recs[lastIdx][22] = 'A strong week overall.';
+    recs[lastIdx][22] = 'A strong week overall. CPA <b>under</b> $50 & falling.';
     recs[lastIdx][23] = 'Win one | Win two | Win three';
     recs[lastIdx][24] = 'USA comment.'; recs[lastIdx][25] = 'CAN comment.';
     recs[lastIdx][26] = 'AUS comment.'; recs[lastIdx][27] = 'DG comment.';
@@ -224,8 +231,27 @@ async function main() {
     await flush();
     const content = t.els.content ? t.els.content.innerHTML : '';
     check('note card renders', content.includes('This week from your strategist') && content.includes('A strong week overall.'));
+    check('angle brackets in a note render literally, never as markup', content.includes('&lt;b&gt;under&lt;/b&gt;') && content.includes('&amp;') && !content.includes('<b>under</b>') && !content.includes('&amp;amp;'));
     check('3 win bullets render', (content.match(/class="win"/g) || []).length === 3);
     check('all 4 market comments render', ['USA comment.', 'CAN comment.', 'AUS comment.', 'DG comment.'].every(s => content.includes(s)));
+  }
+  {
+    // bullets present, note empty -> card must still render
+    const recs = indieRows(csv);
+    recs[recs.length - 1][23] = 'Only bullet';
+    const t = bootPage(recs.map(r => r.map(x => '"' + String(x).replace(/"/g, '""') + '"').join(',')).join('\n'));
+    await flush();
+    check('bullets without a lead note still render the card', (t.els.content.innerHTML || '').includes('Only bullet'));
+  }
+  // ---------------- duplicate week tripwire
+  section('duplicate week tripwire (fixture)');
+  {
+    const recs = indieRows(csv);
+    recs.push(recs[recs.length - 1].slice());           // duplicate the newest week row
+    const t = bootPage(recs.map(r => r.map(x => '"' + String(x).replace(/"/g, '""') + '"').join(',')).join('\n'));
+    await flush();
+    check('banner shown on duplicate week', t.els.banner && t.els.banner.style.display === 'block');
+    check('no rows accepted on duplicate week', !t.sandbox.window.__apollo.data);
   }
   {
     const t = bootPage(csv);   // real CSV currently has empty notes
