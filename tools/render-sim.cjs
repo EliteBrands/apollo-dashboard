@@ -11,7 +11,7 @@
  * filter sweep over every window.
  *
  *   node tools/render-sim.cjs                 fetch the live sheet
- *   node tools/render-sim.cjs <local.csv>     use a saved CSV snapshot
+ *   node tools/render-sim.cjs <google.csv> <meta.csv>   use saved CSV snapshots
  *   RENDER_SIM_PAGE=<file> node tools/...     point at a mutated page copy
  */
 const fs = require('fs');
@@ -75,7 +75,7 @@ function makeElement(id) {
   return el;
 }
 
-function bootPage(csvText) {
+function bootPage(csvText, metaCsvText) {
   const html = fs.readFileSync(PAGE, 'utf8');
   const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]);
   if (!scripts.length) throw new Error('no inline <script> found in page');
@@ -94,7 +94,7 @@ function bootPage(csvText) {
   };
   const sandbox = {
     window: {}, document: documentStub, Chart: ChartStub,
-    fetch: () => Promise.resolve({ ok: true, text: () => Promise.resolve(csvText) }),
+    fetch: (url) => Promise.resolve({ ok: true, text: () => Promise.resolve(String(url).includes('sheet=Meta') ? (metaCsvText == null ? csvText : metaCsvText) : csvText) }),
     console, setTimeout, clearTimeout, Event: function () {},
   };
   sandbox.globalThis = sandbox;
@@ -130,10 +130,13 @@ async function main() {
   const csv = LOCAL_CSV
     ? fs.readFileSync(LOCAL_CSV, 'utf8')
     : await fetchCSV(csvUrl);
+  const LOCAL_META_CSV = process.argv[3] || null;
+  const metaUrl = csvUrl.replace('&sheet=Sheet1', '&sheet=Meta');
+  const metaCsv = LOCAL_META_CSV ? fs.readFileSync(LOCAL_META_CSV, 'utf8') : await fetchCSV(metaUrl);
 
   // ---------------- boot against the real CSV
   section('boot + parse (real CSV)');
-  const { sandbox, els, createdCharts } = bootPage(csv);
+  const { sandbox, els, createdCharts } = bootPage(csv, metaCsv);
   await flush();
   const A = sandbox.window.__apollo;
   check('__apollo hook exposed', !!A);
@@ -281,6 +284,85 @@ async function main() {
     }
     check(`swept ${swept} windows with no exceptions`, errors === 0, `${errors} threw`);
     check('ratio lock + lengths held in every window', lockBreaks === 0, `${lockBreaks} violations`);
+  }
+
+  // ---------------- Meta channel (v2)
+  section('meta channel');
+  check('page exposes switchChannel + CHANNELS', typeof A.switchChannel === 'function' && A.CHANNELS && A.CHANNELS.meta);
+  check('CSV_URL for meta is pinned to sheet=Meta', !!(A.CHANNELS && A.CHANNELS.meta && String(A.CHANNELS.meta.csvUrl).includes('&sheet=Meta')));
+  check('google view is the default', A.channel === 'google');
+  const googleRows = A.data;
+  if (A.switchChannel) {
+    await A.switchChannel('meta'); await flush();
+    check('channel is meta after switch', A.channel === 'meta');
+    const mrows = A.data || [];
+    check('meta rows parsed (>= 60 weeks)', mrows.length >= 60, `got ${mrows.length}`);
+    check('meta rows carry reach/clicks/atc', mrows.length > 0 && ['reach', 'clicks', 'atc'].every(k => k in mrows[mrows.length - 1].all));
+    check('meta rows have a multi bucket, no dg bucket', mrows.length > 0 && 'multi' in mrows[0] && !('dg' in mrows[0]));
+    const mind = indieRows(metaCsv).slice(1).filter(r => Number.isFinite(parseInt(r[0], 10)));
+    const m8 = mind.slice(-8);
+    const mSpend = m8.reduce((s, r) => s + parseFloat(r[2] || 0), 0);
+    const mRev = m8.reduce((s, r) => s + parseFloat(r[3] || 0), 0);
+    const mPur = m8.reduce((s, r) => s + parseFloat(r[4] || 0), 0);
+    const mClicks = m8.reduce((s, r) => s + parseFloat(r[6] || 0), 0);
+    const MW = A.windowStats(mrows.slice(-8), 'all');
+    check('meta spend matches independent sum', Math.abs(MW.spend - mSpend) < 0.01, `${MW.spend} vs ${mSpend}`);
+    check('meta revenue matches independent sum', Math.abs(MW.rev - mRev) < 0.01);
+    check('meta ROAS is sum(rev)/sum(spend)', Math.abs(MW.roas - mRev / mSpend) < 1e-9);
+    check('meta CPA is sum(spend)/sum(purchases)', Math.abs(MW.cpa - mSpend / mPur) < 1e-9);
+    check('meta clicks sum exposed', Math.abs((MW.clicks || 0) - mClicks) < 0.01, `${MW.clicks} vs ${mClicks}`);
+    const mUsa = m8.reduce((s, r) => s + parseFloat(r[8] || 0), 0);
+    check('meta USA window spend matches independent sum (column 9)', Math.abs(A.windowStats(mrows.slice(-8), 'usa').spend - mUsa) < 0.01);
+    for (const k of ['overview', 'usa', 'can', 'aus', 'multi']) A.expanded[k] = false;
+    A.setWindow(8); A.render();
+    const mlive = createdCharts.filter(c => !c.destroyed);
+    check('meta: exactly 1 chart when nothing expanded', mlive.length === 1, `got ${mlive.length}`);
+    const mov = mlive[0];
+    check('meta overview has 3 datasets (no target line)', mov && mov.config.data.datasets.length === 3 && !mov.config.data.datasets.some(d => d.label === '__target'));
+    check('meta spend axis is not ratio-locked (fits data)', mov && mov.config.options.scales.ySpend.max >= Math.max(...mov.config.data.datasets[0].data.map(v => v || 0)));
+    const mhtml = els.content ? els.content.innerHTML : '';
+    check('meta tiles: Reach, Link Clicks, Adds to Cart present', ['>Reach<', '>Link Clicks<', '>Adds to Cart<'].every(s => mhtml.includes(s)));
+    check('meta tiles: New Customers absent', !mhtml.includes('New Customers'));
+    check('meta market cards: USA, Canada, Australia, Multi-market', ['card-usa', 'card-can', 'card-aus', 'card-multi'].every(s => mhtml.includes(`id="${s}"`)) && !mhtml.includes('card-dg'));
+    check('meta market tag shows EB | ALL on multi', mhtml.includes('EB | ALL'));
+    await A.switchChannel('google'); await flush();
+    check('switching back restores google rows untouched', A.channel === 'google' && A.data === googleRows);
+    const ghtml = els.content ? els.content.innerHTML : '';
+    check('google view still has New Customers tile and DG card', ghtml.includes('New Customers') && ghtml.includes('card-dg'));
+  }
+
+  // ---------------- meta notes fixture (byline + multi comment)
+  section('meta notes rendering (fixture)');
+  {
+    const recs = indieRows(metaCsv);
+    const li = recs.length - 1;
+    recs[li][32] = 'Meta lead note.'; recs[li][33] = 'M win one | M win two';
+    recs[li][34] = 'USA meta comment.'; recs[li][35] = 'CAN meta comment.'; recs[li][36] = 'AUS meta comment.'; recs[li][37] = 'MULTI meta comment.';
+    const withNotes = recs.map(r => r.map(x => '"' + String(x).replace(/"/g, '""') + '"').join(',')).join('\n');
+    const t = bootPage(csv, withNotes);
+    await flush();
+    const TA = t.sandbox.window.__apollo;
+    if (TA && TA.switchChannel) { await TA.switchChannel('meta'); await flush(); }
+    const content = t.els.content ? t.els.content.innerHTML : '';
+    check('meta note card renders with the Meta team title', content.includes('This week from your Meta team') && content.includes('Meta lead note.'));
+    check('meta byline names Joshua and Sam', content.includes('Joshua and Sam'));
+    check('2 meta win bullets render', (content.match(/class="win"/g) || []).length === 2);
+    check('all 4 meta market comments render', ['USA meta comment.', 'CAN meta comment.', 'AUS meta comment.', 'MULTI meta comment.'].every(s => content.includes(s)));
+  }
+
+  // ---------------- banner isolation: a broken Meta feed must not hide Google
+  section('banner isolation (fixture)');
+  {
+    const t = bootPage(csv, '<html>not a csv</html>');
+    await flush();
+    const TA = t.sandbox.window.__apollo;
+    const googleOK = !!(TA && TA.data && TA.data.length);
+    if (TA && TA.switchChannel) { await TA.switchChannel('meta'); await flush(); }
+    check('google rendered before the meta failure', googleOK);
+    check('meta failure shows the banner', t.els.banner && t.els.banner.style.display === 'block');
+    if (TA && TA.switchChannel) { await TA.switchChannel('google'); await flush(); }
+    check('banner hidden again on google', !(t.els.banner && t.els.banner.style.display === 'block'));
+    check('google rows survive the round trip', !!(TA && TA.data && TA.data.length));
   }
 
   finish();
