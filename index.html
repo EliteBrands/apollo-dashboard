@@ -279,19 +279,21 @@ let expanded={overview:false,usa:true,can:false,aus:false,dg:false,multi:false};
 function bucketFrom(cells,base,fields){
   const o={}; fields.forEach((f,i)=>{ o[f]=nullableNum(cells[base+i]); }); return o;
 }
-function showBanner(msg){ FEEDERR[CHANNEL]=msg; const b=document.getElementById('banner'); b.textContent=msg; b.style.display='block'; }
+// file the error against the channel that PARSED it, and only paint when that
+// channel is the one on screen - a late meta failure must never banner a healthy google view
+function showBanner(msg,key){ key=key||CHANNEL; FEEDERR[key]=msg; if(key!==CHANNEL) return; const b=document.getElementById('banner'); b.textContent=msg; b.style.display='block'; }
 function hideBanner(){ const b=document.getElementById('banner'); b.textContent=''; b.style.display='none'; }
 
 function loadData(text,c){
   c=c||ch();
   if(/^\s*</.test(text)){ // an HTML body means the data feed is not reachable, not malformed
-    showBanner('The live '+c.label+' data feed is not reachable right now, so those figures are hidden. If this lasts more than a few minutes, please let your Elite Brands team know.');
+    showBanner('The live '+c.label+' data feed is not reachable right now, so those figures are hidden. If this lasts more than a few minutes, please let your Elite Brands team know.',c.key);
     console.error('gviz endpoint returned HTML instead of CSV (sheet unshared, deleted, or blocked).');
     return null;
   }
   const recs=parseCSV(text);
   if(!recs.length){
-    showBanner('The live '+c.label+' data feed came back empty, so those figures are hidden. If this lasts, please let your Elite Brands team know.');
+    showBanner('The live '+c.label+' data feed came back empty, so those figures are hidden. If this lasts, please let your Elite Brands team know.',c.key);
     console.error('gviz endpoint returned an empty body.');
     return null;
   }
@@ -299,7 +301,7 @@ function loadData(text,c){
   const hdr=recs[0];
   for(let i=0;i<c.headers.length;i++){
     if((hdr[i]||'')!==c.headers[i]){
-      showBanner('This report\'s '+c.label+' data feed needs attention, so those figures are hidden rather than risk showing the wrong numbers. Please let your Elite Brands team know.');
+      showBanner('This report\'s '+c.label+' data feed needs attention, so those figures are hidden rather than risk showing the wrong numbers. Please let your Elite Brands team know.',c.key);
       console.error(`Header tripwire (${c.key}): column ${i+1} is "${hdr[i]||''}", expected "${c.headers[i]}". A column was probably inserted in the sheet.`);
       return null;
     }
@@ -313,7 +315,7 @@ function loadData(text,c){
     if(!Number.isFinite(week)) continue;
     if(!/^\d{4}-\d{2}-\d{2}$/.test(endISO(cells[1]))){ console.warn(`row for week ${week} skipped: unreadable date range "${cells[1]}"`); continue; }
     if(seenWeeks.has(week)){
-      showBanner('This report\'s '+c.label+' data feed needs attention (a week appears twice), so those figures are hidden. Please let your Elite Brands team know.');
+      showBanner('This report\'s '+c.label+' data feed needs attention (a week appears twice), so those figures are hidden. Please let your Elite Brands team know.',c.key);
       console.error(`Duplicate week number ${week} in the ${c.key} sheet tab - totals would double-count.`);
       return null;
     }
@@ -413,7 +415,7 @@ function render(){
   const c=ch();
   const rows=rowsAll.filter(r=>(!state.from||r.endISO>=state.from)&&(!state.to||r.endISO<=state.to));
   const el=document.getElementById('content');
-  charts.forEach(c=>c.destroy()); charts=[];
+  charts.forEach(x=>x.destroy()); charts=[];
   if(!rows.length){
     document.getElementById('wcount').textContent=`0 of ${rowsAll.length} weeks`;
     el.className='loading'; el.textContent='No weeks in this date range.'; return;
@@ -607,9 +609,9 @@ function showChannel(){
 }
 function switchChannel(key){
   if(!CHANNELS[key]||!CHANNELS[key].enabled) return Promise.resolve();
-  const prevKey=CHANNEL;
   CHANNEL=key;
   if(STORE[key]!==null||FEEDERR[key]){ showChannel(); return Promise.resolve(); }
+  charts.forEach(x=>x.destroy()); charts=[];   // the old channel's charts are about to be detached
   document.getElementById('content').className='loading';
   document.getElementById('content').textContent='Loading live data…';
   return fetchChannel(key).then(rows=>{ STORE[key]=rows; if(CHANNEL===key) showChannel(); });
@@ -633,8 +635,9 @@ window.__apollo={ parseCSV, loadData, windowStats, makePerfChart, sparkSVG, rend
     if(rows&&rows.length){
       DATA=rows; setWindow(8);
       document.getElementById('controls').style.visibility='visible';   // only after a successful first render
-      if(CHANNELS.meta.enabled) document.getElementById('channelrow').style.visibility='visible';
     }
+    // the channel row is NOT gated on google: a broken google feed must still let meta be opened
+    if(CHANNELS.meta.enabled) document.getElementById('channelrow').style.visibility='visible';
     showChannel();
     if(wantMeta) switchChannel('meta');
   });

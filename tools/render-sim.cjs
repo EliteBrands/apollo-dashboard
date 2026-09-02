@@ -369,6 +369,29 @@ async function main() {
     check('banner hidden again on google', !(t.els.banner && t.els.banner.style.display === 'block'));
     check('google rows survive the round trip', !!(TA && TA.data && TA.data.length));
   }
+  {
+    // RACE: a meta response that fails to parse must file its error against META and
+    // leave the DOM alone while google is the channel on screen. Calling loadData with
+    // the meta config directly is exactly what a late fetch resolution does.
+    const t = bootPage(csv);
+    await flush();
+    const TA = t.sandbox.window.__apollo;
+    TA.loadData('<html>not a csv</html>', TA.CHANNELS.meta);
+    await flush();
+    check('a meta parse failure while google is active does not paint the banner', !(t.els.banner && t.els.banner.style.display === 'block'));
+    check('google view still renders after that', !!(TA.data && TA.data.length));
+    await TA.switchChannel('meta'); await flush();
+    check('the filed meta error shows once meta is opened', t.els.banner && t.els.banner.style.display === 'block');
+  }
+  {
+    // a broken GOOGLE feed must not make a healthy meta view unreachable
+    const t = bootPage('<html>broken</html>', metaCsv);
+    await flush();
+    const TA = t.sandbox.window.__apollo;
+    check('channel row visible even when google fails', t.els.channelrow && t.els.channelrow.style.visibility === 'visible');
+    await TA.switchChannel('meta'); await flush();
+    check('meta renders while google is broken', !!(TA.data && TA.data.length));
+  }
 
   finish();
 
