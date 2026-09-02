@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- apollo-dashboard v1.0.0 -->
+<!-- apollo-dashboard v2.0.0 -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -42,6 +42,15 @@
   .controls input[type="date"]{background:rgba(5,8,22,.6);border:1px solid #4B5563;color:var(--text);border-radius:10px;padding:6px 9px;font-family:var(--mono);font-size:12px;color-scheme:dark}
   .controls input[type="date"]:focus{outline:none;border-color:var(--cyan);box-shadow:0 0 0 2px rgba(42,174,224,.25)}
   .wcount{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .channelrow{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+  .channelrow .k{font-size:11.5px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-right:4px}
+  .channel{display:inline-flex;align-items:center;gap:9px;font-family:var(--head);font-weight:600;font-size:13.5px;color:var(--muted);background:transparent;border:1px solid var(--border);border-radius:999px;padding:9px 20px;cursor:pointer;transition:all .15s}
+  .channel:hover{color:var(--text);background:rgba(148,163,184,.08)}
+  .channel[aria-pressed="true"]{color:var(--ink);background:var(--cyan);border-color:var(--cyan)}
+  .channel .mark{width:18px;height:18px;border-radius:5px;border:1px solid rgba(148,163,184,.35);display:grid;place-items:center;font-size:10px;font-weight:700}
+  .channel[aria-pressed="true"] .mark{border-color:transparent;background:rgba(5,8,22,.18)}
+  .channelrow .hint{margin-left:auto;font-size:12px;color:var(--muted)}
+  .tiles.meta{grid-template-columns:repeat(4,minmax(0,1fr))}
 
   .tiles{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px}
   .tile{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:16px 18px}
@@ -98,14 +107,16 @@
   .loading{padding:40px;text-align:center;color:var(--muted)}
   footer{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px;border-top:1px solid var(--border);padding-top:16px;flex-wrap:wrap}
   footer b{font-family:var(--head);font-weight:600;color:var(--text)}
-  @media (max-width:980px){ .tiles{grid-template-columns:repeat(3,minmax(0,1fr))} .markets{grid-template-columns:1fr} .wins{grid-template-columns:1fr} .wrap{padding:20px} }
+  @media (max-width:980px){ .tiles{grid-template-columns:repeat(3,minmax(0,1fr))} .tiles.meta{grid-template-columns:repeat(3,minmax(0,1fr))} .markets{grid-template-columns:1fr} .wins{grid-template-columns:1fr} .wrap{padding:20px} }
   @media (max-width:600px){
     header{flex-wrap:wrap}
     .headright{margin-left:0;text-align:left;flex:1 1 100%}
     h1{font-size:22px}
     .tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .tiles.meta{grid-template-columns:repeat(2,minmax(0,1fr))}
     .tile .v{font-size:19px}
     .mkt.expanded .mstats{grid-template-columns:repeat(3,minmax(0,1fr))}
+    .channelrow .hint{display:none}
   }
 </style>
 </head>
@@ -116,7 +127,7 @@
     <div class="brandmark">EB</div>
     <div>
       <h1>Apollo Scooters <span class="accent">Weekly Performance</span></h1>
-      <div class="subline">Prepared by Elite Brands · Google Ads · All figures CAD · Purchase conversions, counted by conversion time</div>
+      <div class="subline" id="subline">Prepared by Elite Brands · Google Ads · All figures CAD · Purchase conversions, counted by conversion time</div>
     </div>
     <div class="headright">
       <span class="livebadge"><span class="livedot"></span>LIVE REPORT</span>
@@ -125,6 +136,13 @@
   </header>
 
   <div id="banner" class="banner" role="alert"></div>
+
+  <div class="channelrow" id="channelrow" style="visibility:hidden">
+    <span class="k">Channel</span>
+    <button class="channel" id="ch-google" data-channel="google" aria-pressed="true"><span class="mark">G</span>Google Ads</button>
+    <button class="channel" id="ch-meta" data-channel="meta" aria-pressed="false"><span class="mark">M</span>Meta Ads</button>
+    <span class="hint">Two views, one report. Each channel counts its own sales.</span>
+  </div>
 
   <div class="controls" id="controls" style="visibility:hidden">
     <button class="preset" data-weeks="8" aria-pressed="true">8 weeks</button>
@@ -140,29 +158,70 @@
 
   <footer>
     <b>Elite Brands</b>
-    <span>· Performance Marketing · Data: Google Ads API, purchase conversions counted by conversion time · Questions: reply to your weekly email</span>
+    <span id="footnote">· Performance Marketing · Data: Google Ads API, purchase conversions counted by conversion time · Questions: reply to your weekly email</span>
   </footer>
 </div>
 
 <script>
 const SHEET_ID = '1IqcF3hZNmtBlsffVi7y9jToIVGbHyWsDuT6os5wHAt0';   // config.json dashboard_sheet_id
-const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Sheet1`;
+const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Sheet1`;   // google (kept for the sim's URL check)
 const TARGET_ROAS = 12;   // keep in sync with clients/apollo-scooters/config.json target_roas
-const EXPECTED_HEADERS = [
-  'Week','Date Range',
-  'ALL Spend','ALL Revenue','ALL Purchases','ALL NewCust',
-  'USA Spend','USA Revenue','USA Purchases','USA NewCust',
-  'CAN Spend','CAN Revenue','CAN Purchases','CAN NewCust',
-  'AUS Spend','AUS Revenue','AUS Purchases','AUS NewCust',
-  'DG Spend','DG Revenue','DG Purchases','DG NewCust',
-  'Weekly Note','Win Bullets','Comment USA','Comment CAN','Comment AUS','Comment DG',
-];
-const BUCKETS = [
-  { key:'usa', name:'United States', tag:'EB-USA' },
-  { key:'can', name:'Canada',        tag:'EB-CAN' },
-  { key:'aus', name:'Australia',     tag:'EB-AUS' },
-  { key:'dg',  name:'Demand Gen',    tag:'Awareness' },
-];
+const CHANNELS = {
+  google: {
+    key:'google', label:'Google Ads', enabled:true,
+    csvUrl: CSV_URL,
+    headers: [
+      'Week','Date Range',
+      'ALL Spend','ALL Revenue','ALL Purchases','ALL NewCust',
+      'USA Spend','USA Revenue','USA Purchases','USA NewCust',
+      'CAN Spend','CAN Revenue','CAN Purchases','CAN NewCust',
+      'AUS Spend','AUS Revenue','AUS Purchases','AUS NewCust',
+      'DG Spend','DG Revenue','DG Purchases','DG NewCust',
+      'Weekly Note','Win Bullets','Comment USA','Comment CAN','Comment AUS','Comment DG',
+    ],
+    fields: ['spend','revenue','purchases','newcust'],
+    bucketKeys: ['all','usa','can','aus','dg'],
+    buckets: [
+      { key:'usa', name:'United States', tag:'EB-USA', foot:'' },
+      { key:'can', name:'Canada',        tag:'EB-CAN', foot:'' },
+      { key:'aus', name:'Australia',     tag:'EB-AUS', foot:' · small volumes swing weekly' },
+      { key:'dg',  name:'Demand Gen',    tag:'Awareness', foot:' · awareness channel, volatile by nature' },
+    ],
+    targetRoas: TARGET_ROAS,
+    subline: 'Prepared by Elite Brands · Google Ads · All figures CAD · Purchase conversions, counted by conversion time',
+    footnote: '· Performance Marketing · Data: Google Ads API, purchase conversions counted by conversion time · Questions: reply to your weekly email',
+    noteTitle: 'This week from your strategist', byline: 'Glen Wilson · Elite Brands', commentLabel: 'Strategist:',
+    chartTitle: 'Revenue, Spend and ROAS · all markets',
+  },
+  meta: {
+    key:'meta', label:'Meta Ads', enabled:true,
+    csvUrl: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Meta`,
+    headers: [
+      'Week','Date Range',
+      'ALL Spend','ALL Revenue','ALL Purchases','ALL Reach','ALL LinkClicks','ALL AddsToCart',
+      'USA Spend','USA Revenue','USA Purchases','USA Reach','USA LinkClicks','USA AddsToCart',
+      'CAN Spend','CAN Revenue','CAN Purchases','CAN Reach','CAN LinkClicks','CAN AddsToCart',
+      'AUS Spend','AUS Revenue','AUS Purchases','AUS Reach','AUS LinkClicks','AUS AddsToCart',
+      'MULTI Spend','MULTI Revenue','MULTI Purchases','MULTI Reach','MULTI LinkClicks','MULTI AddsToCart',
+      'Weekly Note','Win Bullets','Comment USA','Comment CAN','Comment AUS','Comment MULTI',
+    ],
+    fields: ['spend','revenue','purchases','reach','clicks','atc'],
+    bucketKeys: ['all','usa','can','aus','multi'],
+    buckets: [
+      { key:'usa',   name:'United States', tag:'EB | US',  foot:'' },
+      { key:'can',   name:'Canada',        tag:'EB | CA',  foot:'' },
+      { key:'aus',   name:'Australia',     tag:'EB | AU',  foot:' · small volumes swing weekly' },
+      { key:'multi', name:'Multi-market',  tag:'EB | ALL', foot:' · campaigns that run across markets' },
+    ],
+    targetRoas: null,
+    subline: 'Prepared by Elite Brands · Meta Ads · All figures CAD · Meta-reported purchases, 7-day click / 1-day view',
+    footnote: '· Performance Marketing · Data: Meta Marketing API, Meta-reported purchases (7-day click / 1-day view). Meta figures do not add to Google figures. Market reach is summed across campaigns · Questions: reply to your weekly email',
+    noteTitle: 'This week from your Meta team', byline: 'Joshua and Sam · Elite Brands', commentLabel: 'Meta team:',
+    chartTitle: 'Revenue, Spend and ROAS · all markets',
+  },
+};
+let CHANNEL='google';
+const ch = () => CHANNELS[CHANNEL];
 
 // ---- CSV parsing (quote-aware, record-aware; every cell trimmed)
 function parseCSV(text){
@@ -209,57 +268,62 @@ const endISO = label => { const m=(label.split(' - ')[1]||'').split('/'); return
 const longEnd = label => { const [mm,dd,yy]=(label.split(' - ')[1]||'').split('/'); const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return `${MON[(+mm)-1]} ${+dd}, ${yy}`; };
 
 // ---- data load
-let DATA=null;           // {rows:[{week,label,endISO,all,usa,can,aus,dg}], notes:{...}}
+let DATA=null;           // rows of the ACTIVE channel
+const STORE={google:null,meta:null};        // parsed rows per channel (null = not loaded or failed)
+const FEEDERR={google:'',meta:''};          // banner text per channel ('' = healthy)
 let charts=[];           // live Chart instances, destroyed on every rebuild
 let state={from:null,to:null};   // ISO end-date bounds
-let expanded={overview:false,usa:true,can:false,aus:false,dg:false};   // lead market open, per approved mock
+let activePreset=8;              // 8 | 12 | 26 | 'all' | null (null = custom dates)
+let expanded={overview:false,usa:true,can:false,aus:false,dg:false,multi:false};   // lead market open, per approved mock
 
-function bucketFrom(cells,base){
-  return { spend:nullableNum(cells[base]), revenue:nullableNum(cells[base+1]),
-           purchases:nullableNum(cells[base+2]), newcust:nullableNum(cells[base+3]) };
+function bucketFrom(cells,base,fields){
+  const o={}; fields.forEach((f,i)=>{ o[f]=nullableNum(cells[base+i]); }); return o;
 }
-function showBanner(msg){ const b=document.getElementById('banner'); b.textContent=msg; b.style.display='block'; }
+function showBanner(msg){ FEEDERR[CHANNEL]=msg; const b=document.getElementById('banner'); b.textContent=msg; b.style.display='block'; }
+function hideBanner(){ const b=document.getElementById('banner'); b.textContent=''; b.style.display='none'; }
 
-function loadData(text){
+function loadData(text,c){
+  c=c||ch();
   if(/^\s*</.test(text)){ // an HTML body means the data feed is not reachable, not malformed
-    showBanner('The live data feed is not reachable right now, so figures are hidden. If this lasts more than a few minutes, please let your Elite Brands team know.');
+    showBanner('The live '+c.label+' data feed is not reachable right now, so those figures are hidden. If this lasts more than a few minutes, please let your Elite Brands team know.');
     console.error('gviz endpoint returned HTML instead of CSV (sheet unshared, deleted, or blocked).');
     return null;
   }
   const recs=parseCSV(text);
   if(!recs.length){
-    showBanner('The live data feed came back empty, so figures are hidden. If this lasts, please let your Elite Brands team know.');
+    showBanner('The live '+c.label+' data feed came back empty, so those figures are hidden. If this lasts, please let your Elite Brands team know.');
     console.error('gviz endpoint returned an empty body.');
     return null;
   }
   // positional tripwire: a silently inserted column would shift every metric
   const hdr=recs[0];
-  for(let i=0;i<EXPECTED_HEADERS.length;i++){
-    if((hdr[i]||'')!==EXPECTED_HEADERS[i]){
-      showBanner('This report\'s data feed needs attention, so figures are hidden rather than risk showing the wrong numbers. Please let your Elite Brands team know.');
-      console.error(`Header tripwire: column ${i+1} is "${hdr[i]||''}", expected "${EXPECTED_HEADERS[i]}". A column was probably inserted in the sheet.`);
+  for(let i=0;i<c.headers.length;i++){
+    if((hdr[i]||'')!==c.headers[i]){
+      showBanner('This report\'s '+c.label+' data feed needs attention, so those figures are hidden rather than risk showing the wrong numbers. Please let your Elite Brands team know.');
+      console.error(`Header tripwire (${c.key}): column ${i+1} is "${hdr[i]||''}", expected "${c.headers[i]}". A column was probably inserted in the sheet.`);
       return null;
     }
   }
+  const nf=c.fields.length, nb=c.bucketKeys.length, noteBase=2+nb*nf;
   const rows=[];
   const seenWeeks=new Set();
-  for(const c of recs.slice(1)){
-    if(c.length<22) continue;
-    const week=parseInt(c[0],10);
+  for(const cells of recs.slice(1)){
+    if(cells.length<noteBase) continue;
+    const week=parseInt(cells[0],10);
     if(!Number.isFinite(week)) continue;
-    if(!/^\d{4}-\d{2}-\d{2}$/.test(endISO(c[1]))){ console.warn(`row for week ${week} skipped: unreadable date range "${c[1]}"`); continue; }
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(endISO(cells[1]))){ console.warn(`row for week ${week} skipped: unreadable date range "${cells[1]}"`); continue; }
     if(seenWeeks.has(week)){
-      showBanner('This report\'s data feed needs attention (a week appears twice), so figures are hidden. Please let your Elite Brands team know.');
-      console.error(`Duplicate week number ${week} in the sheet - totals would double-count.`);
+      showBanner('This report\'s '+c.label+' data feed needs attention (a week appears twice), so those figures are hidden. Please let your Elite Brands team know.');
+      console.error(`Duplicate week number ${week} in the ${c.key} sheet tab - totals would double-count.`);
       return null;
     }
     seenWeeks.add(week);
-    rows.push({
-      week, label:c[1], endISO:endISO(c[1]),
-      all:bucketFrom(c,2), usa:bucketFrom(c,6), can:bucketFrom(c,10),
-      aus:bucketFrom(c,14), dg:bucketFrom(c,18),
-      note:c[22]||'', bullets:c[23]||'', comments:{usa:c[24]||'',can:c[25]||'',aus:c[26]||'',dg:c[27]||''},
-    });
+    const row={ week, label:cells[1], endISO:endISO(cells[1]) };
+    c.bucketKeys.forEach((b,i)=>{ row[b]=bucketFrom(cells,2+i*nf,c.fields); });
+    row.note=cells[noteBase]||''; row.bullets=cells[noteBase+1]||'';
+    row.comments={};
+    c.buckets.forEach((B,i)=>{ row.comments[B.key]=cells[noteBase+2+i]||''; });
+    rows.push(row);
   }
   rows.sort((a,b)=>a.week-b.week);
   return rows;
@@ -268,15 +332,16 @@ function loadData(text){
 // ---- window stats: ratios are sum/sum over the window, never averaged ratios
 const sumN=a=>a.reduce((s,v)=>s+(v||0),0);
 function windowStats(rows,bucket){
-  const spend=sumN(rows.map(r=>r[bucket].spend)), rev=sumN(rows.map(r=>r[bucket].revenue));
-  const pur=sumN(rows.map(r=>r[bucket].purchases)), nc=sumN(rows.map(r=>r[bucket].newcust));
-  return { spend, rev, pur, nc,
+  const g=f=>sumN(rows.map(r=>r[bucket][f]));
+  const spend=g('spend'), rev=g('revenue'), pur=g('purchases'), nc=g('newcust');
+  return { spend, rev, pur, nc, reach:g('reach'), clicks:g('clicks'), atc:g('atc'),
     roas: spend>0?rev/spend:null, cpa: pur>0?spend/pur:null, ncPct: pur>0?nc/pur:null };
 }
 
 // ---- charts
 function niceMax(v){ if(!(v>0)) return 1; const p=Math.pow(10,Math.floor(Math.log10(v))); const n=v/p; const m=[1,1.2,1.5,2,2.5,3,4,5,6,8,10].find(s=>n<=s); return m*p; }
-function makePerfChart(canvas, rows, bucket){
+function makePerfChart(canvas, rows, bucket, c){
+  c=c||ch(); const T=c.targetRoas;
   const withYear=rows.length>52;                       // "All time" spans years; label them
   const labels=rows.map(r=>shortEnd(r.label,withYear));
   const spend=rows.map(r=>r[bucket].spend);
@@ -284,15 +349,16 @@ function makePerfChart(canvas, rows, bucket){
   const roas=rows.map(r=>{ const s=r[bucket].spend, v=r[bucket].revenue; return (s!=null&&s>0&&v!=null)?v/s:null; });
   let revMax=niceMax(Math.max(...rev.map(n0),1));
   const spendMaxData=Math.max(...spend.map(n0),0);
-  if(spendMaxData>revMax/TARGET_ROAS) revMax=niceMax(spendMaxData*TARGET_ROAS);  // no-clip guard
-  const roasMax=Math.max(16, Math.ceil(Math.max(...roas.map(n0),0)/4)*4);
-  const chart=new Chart(canvas,{
-    data:{ labels, datasets:[
+  if(T&&spendMaxData>revMax/T) revMax=niceMax(spendMaxData*T);  // no-clip guard (ratio-locked channels only)
+  const roasMax=Math.max(T?16:4, Math.ceil(Math.max(...roas.map(n0),0)/4)*4);
+  const datasets=[
       { type:'bar', label:'Spend', data:spend, backgroundColor:'rgba(42,174,224,0.45)', borderRadius:4, yAxisID:'ySpend', order:3 },
       { type:'line', label:'Revenue', data:rev, borderColor:'#E5E9F0', backgroundColor:'#E5E9F0', borderWidth:2.5, pointRadius:3, pointHoverRadius:5, tension:.25, spanGaps:false, yAxisID:'yRev', order:1 },
       { type:'line', label:'ROAS', data:roas, borderColor:'#C98500', backgroundColor:'#C98500', borderWidth:2, borderDash:[6,4], pointRadius:2.5, pointHoverRadius:5, tension:.25, spanGaps:false, yAxisID:'yRoas', order:2 },
-      { type:'line', label:'__target', data:labels.map(()=>TARGET_ROAS), borderColor:'rgba(201,133,0,0.45)', borderWidth:1, borderDash:[3,5], pointRadius:0, pointHitRadius:0, yAxisID:'yRoas', order:4 },
-    ]},
+  ];
+  if(T) datasets.push({ type:'line', label:'__target', data:labels.map(()=>T), borderColor:'rgba(201,133,0,0.45)', borderWidth:1, borderDash:[3,5], pointRadius:0, pointHitRadius:0, yAxisID:'yRoas', order:4 });
+  const chart=new Chart(canvas,{
+    data:{ labels, datasets },
     options:{
       responsive:true, maintainAspectRatio:false, animation:false,
       interaction:{mode:'index',intersect:false},
@@ -317,7 +383,7 @@ function makePerfChart(canvas, rows, bucket){
       scales:{
         x:{ grid:{color:'rgba(148,163,184,0.08)'}, ticks:{color:'#9CA3AF',font:{family:'JetBrains Mono',size:10},maxRotation:60,autoSkip:true} },
         yRev:{ position:'left', min:0, max:revMax, grid:{color:'rgba(148,163,184,0.12)'}, ticks:{color:'#9CA3AF',font:{family:'JetBrains Mono',size:10},callback:v=>'$'+(v>=1000?(v/1000)+'k':v)} },
-        ySpend:{ position:'right', min:0, max:revMax/TARGET_ROAS, display:false },   // ratio lock: bar meets revenue line at exactly 12.0x
+        ySpend:{ position:'right', min:0, max:T?revMax/T:niceMax(spendMaxData), display:false },   // ratio lock when a target exists, else fit the data
         yRoas:{ position:'right', min:0, max:roasMax, grid:{drawOnChartArea:false}, ticks:{color:'#C98500',font:{family:'JetBrains Mono',size:10},callback:v=>v+'x'} },
       },
     },
@@ -344,6 +410,7 @@ function statCell(k,v,d){ return `<div class="ms"><div class="k">${k}</div><div 
 
 function render(){
   const rowsAll=DATA;
+  const c=ch();
   const rows=rowsAll.filter(r=>(!state.from||r.endISO>=state.from)&&(!state.to||r.endISO<=state.to));
   const el=document.getElementById('content');
   charts.forEach(c=>c.destroy()); charts=[];
@@ -377,7 +444,20 @@ function render(){
                    :'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg>';
 
   let html='';
-  html+=`<div class="tiles">
+  if(c.key==='meta'){
+    const wkReach=wk.reach, wkClicks=wk.clicks, wkAtc=wk.atc;
+    html+=`<div class="tiles meta">
+    <div class="tile"><div class="k">Ad Spend</div><div class="v">${fmt$(W.spend)}</div><div class="s">this week ${fmt$(wk.spend)} ${deltaSpan(pctDelta(wk.spend,pv&&pv.spend),'none')}</div></div>
+    <div class="tile"><div class="k">Revenue</div><div class="v">${fmt$(W.rev)}</div><div class="s">this week ${fmt$(wk.revenue)} ${deltaSpan(pctDelta(wk.revenue,pv&&pv.revenue),'up')}</div></div>
+    <div class="tile hl"><div class="k">ROAS</div><div class="v">${fmtX(W.roas)}</div><div class="s">this week ${fmtX(wkRoas)} ${deltaSpan(pctDelta(wkRoas,(pv&&pv.spend>0&&pv.revenue!=null)?pv.revenue/pv.spend:null),'up')}</div></div>
+    <div class="tile"><div class="k">Purchases</div><div class="v">${fmtI(W.pur)}</div><div class="s">this week ${fmtI(wk.purchases)} ${deltaSpan(pctDelta(wk.purchases,pv&&pv.purchases),'up')}</div></div>
+    <div class="tile"><div class="k">Cost / Purchase</div><div class="v">${W.cpa==null?'-':'$'+Math.round(W.cpa)}</div><div class="s">this week ${wkCpa==null?'-':'$'+Math.round(wkCpa)} ${deltaSpan(pctDelta(wkCpa,pv&&pv.purchases>0?pv.spend/pv.purchases:null),'down')}</div></div>
+    <div class="tile"><div class="k">Reach</div><div class="v">${fmtI(W.reach)}</div><div class="s">this week ${fmtI(wkReach)} ${deltaSpan(pctDelta(wkReach,pv&&pv.reach),'none')}</div></div>
+    <div class="tile"><div class="k">Link Clicks</div><div class="v">${fmtI(W.clicks)}</div><div class="s">this week ${fmtI(wkClicks)} ${deltaSpan(pctDelta(wkClicks,pv&&pv.clicks),'up')}</div></div>
+    <div class="tile"><div class="k">Adds to Cart</div><div class="v">${fmtI(W.atc)}</div><div class="s">this week ${fmtI(wkAtc)} ${deltaSpan(pctDelta(wkAtc,pv&&pv.atc),'up')}</div></div>
+  </div>`;
+  } else {
+    html+=`<div class="tiles">
     <div class="tile"><div class="k">Ad Spend</div><div class="v">${fmt$(W.spend)}</div><div class="s">this week ${fmt$(wk.spend)} ${deltaSpan(pctDelta(wk.spend,pv&&pv.spend),'none')}</div></div>
     <div class="tile hl"><div class="k">Revenue</div><div class="v">${fmt$(W.rev)}</div><div class="s">this week ${fmt$(wk.revenue)} ${deltaSpan(pctDelta(wk.revenue,pv&&pv.revenue),'up')}</div></div>
     <div class="tile"><div class="k">ROAS</div><div class="v">${fmtX(W.roas)}</div><div class="s">this week ${fmtX(wkRoas)} · target ${TARGET_ROAS.toFixed(1)}x</div></div>
@@ -385,16 +465,17 @@ function render(){
     <div class="tile"><div class="k">Cost / Purchase</div><div class="v">${W.cpa==null?'-':'$'+Math.round(W.cpa)}</div><div class="s">this week ${wkCpa==null?'-':'$'+Math.round(wkCpa)} ${deltaSpan(pctDelta(wkCpa,pv&&pv.purchases>0?pv.spend/pv.purchases:null),'down')}</div></div>
     <div class="tile"><div class="k">New Customers</div><div class="v">${fmtP(W.ncPct)}</div><div class="s">this week ${fmtP(wkNc)} of purchases</div></div>
   </div>`;
+  }
 
   html+=`<div class="card ${expanded.overview?'expanded':''}" id="card-overview">
     <div class="cardhead">
-      <div><h2>Revenue, Spend and ROAS · all markets</h2>
-      <div class="sub">tap or hover any week for exact values · spend bar meets the revenue line at exactly ${TARGET_ROAS.toFixed(1)}x</div></div>
+      <div><h2>${c.chartTitle}</h2>
+      <div class="sub">tap or hover any week for exact values${c.targetRoas?' · spend bar meets the revenue line at exactly '+c.targetRoas.toFixed(1)+'x':''}</div></div>
       <div class="legend">
         <span><span class="chip" style="background:rgba(42,174,224,.55)"></span>Spend</span>
         <span><span class="lchip" style="background:#E5E9F0"></span>Revenue</span>
         <span><span class="lchip" style="border-top:2px dashed #C98500"></span>ROAS</span>
-        <span><span class="lchip" style="border-top:1px dashed rgba(201,133,0,.6)"></span>${TARGET_ROAS.toFixed(1)}x target</span>
+        ${c.targetRoas?`<span><span class="lchip" style="border-top:1px dashed rgba(201,133,0,.6)"></span>${c.targetRoas.toFixed(1)}x target</span>`:''}
       </div>
       <button class="expandbtn" data-expand="overview" aria-expanded="${expanded.overview}">${expanded.overview?'Collapse':'Expand'} ${chevron(expanded.overview)}</button>
     </div>
@@ -405,8 +486,8 @@ function render(){
     html+=`<div class="notecard">
       <div class="nh">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2AAEE0" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
-        <h2>This week from your strategist</h2>
-        <span class="byline">Glen Wilson · Elite Brands · week ending ${longEnd(latestAll.label)}</span>
+        <h2>${c.noteTitle}</h2>
+        <span class="byline">${c.byline} · week ending ${longEnd(latestAll.label)}</span>
       </div>
       ${note?`<div class="notebody">${note}</div>`:''}
       ${bullets.length?`<div class="wins">${bullets.map(b=>`<div class="win">${check}<div>${b}</div></div>`).join('')}</div>`:''}
@@ -414,7 +495,7 @@ function render(){
   }
 
   html+='<div class="markets">';
-  for(const B of BUCKETS){
+  for(const B of c.buckets){
     const mW=windowStats(rows,B.key);
     const m=latest[B.key], mp=prev?prev[B.key]:null;
     const mRoas=(m.spend>0&&m.revenue!=null)?m.revenue/m.spend:null;
@@ -430,26 +511,29 @@ function render(){
         <span class="mroas">${fmtX(mRoas)} <small class="${dRoas==null?'':(dRoas>=0?'up':'down')}">${dRoas==null?'':(dRoas>=0?'+':'')+dRoas.toFixed(1)+' WoW'}</small></span>
         <button class="expandbtn" data-expand="${B.key}" aria-expanded="${isX}">${isX?'Collapse':'Expand'} ${chevron(isX)}</button>
       </div>
-      ${comment?`<div class="comment"><b>Strategist:</b> ${comment}</div>`:''}
+      ${comment?`<div class="comment"><b>${c.commentLabel}</b> ${comment}</div>`:''}
       <div class="mstats">
         ${statCell('Spend',fmt$(m.spend),deltaSpan(pctDelta(m.spend,mp&&mp.spend),'none'))}
         ${statCell('Revenue',fmt$(m.revenue),deltaSpan(pctDelta(m.revenue,mp&&mp.revenue),'up'))}
         ${statCell('Purchases',fmtI(m.purchases),deltaSpan(pctDelta(m.purchases,mp&&mp.purchases),'up'))}
         ${statCell('Cost / Purchase',mCpa==null?'-':'$'+Math.round(mCpa),deltaSpan(pctDelta(mCpa,mp&&mp.purchases>0?mp.spend/mp.purchases:null),'down'))}
+        ${c.key==='meta'?statCell('Link Clicks',fmtI(m.clicks),deltaSpan(pctDelta(m.clicks,mp&&mp.clicks),'up')):''}
+        ${c.key==='meta'?statCell('Adds to Cart',fmtI(m.atc),deltaSpan(pctDelta(m.atc,mp&&mp.atc),'up')):''}
         ${isX?statCell('ROAS '+rows.length+'-wk',fmtX(mW.roas),'selected period'):''}
-        ${isX?statCell('New Customers',fmtP(mNc),'this week'):''}
+        ${isX&&c.key==='meta'?statCell('Reach',fmtI(m.reach),'this week'):''}
+        ${isX&&c.key!=='meta'?statCell('New Customers',fmtP(mNc),'this week'):''}
       </div>
       ${sparkSVG(rows.map(r=>r[B.key].revenue))}
       <div class="chartbox"><canvas id="chart-${B.key}" role="img" aria-label="${B.name} weekly revenue, spend and ROAS chart"></canvas></div>
-      <div class="mfoot">${rows.length}-week window: ${fmt$(mW.spend)} spend · ${fmt$(mW.rev)} revenue · ${fmtX(mW.roas)}${B.key==='aus'?' · small volumes swing weekly':''}${B.key==='dg'?' · awareness channel, volatile by nature':''}</div>
+      <div class="mfoot">${rows.length}-week window: ${fmt$(mW.spend)} spend · ${fmt$(mW.rev)} revenue · ${fmtX(mW.roas)}${B.foot}</div>
     </div>`;
   }
   html+='</div>';
 
   el.className=''; el.innerHTML=html;
 
-  makePerfChart(document.getElementById('chart-overview'),rows,'all');
-  for(const B of BUCKETS) if(expanded[B.key]) makePerfChart(document.getElementById('chart-'+B.key),rows,B.key);
+  makePerfChart(document.getElementById('chart-overview'),rows,'all',c);
+  for(const B of c.buckets) if(expanded[B.key]) makePerfChart(document.getElementById('chart-'+B.key),rows,B.key,c);
 
   el.querySelectorAll('[data-expand]').forEach(btn=>{
     btn.addEventListener('click',()=>{ const k=btn.getAttribute('data-expand'); expanded[k]=!expanded[k]; render(); });
@@ -458,14 +542,17 @@ function render(){
 
 // ---- filters
 function setWindow(weeks){
-  const rows=DATA; if(!rows.length) return;
+  const rows=DATA; if(!rows||!rows.length) return;
+  activePreset=weeks;
   const to=rows[rows.length-1].endISO;
   const from=weeks==='all'?rows[0].endISO:(rows[Math.max(0,rows.length-weeks)]||rows[0]).endISO;
   state={from,to};
   document.getElementById('d-from').value=from;
   document.getElementById('d-to').value=to;
 }
+let controlsWired=false;
 function wireControls(){
+  if(controlsWired) return; controlsWired=true;
   document.querySelectorAll('.preset').forEach(b=>{
     b.addEventListener('click',()=>{
       document.querySelectorAll('.preset').forEach(x=>x.setAttribute('aria-pressed','false'));
@@ -477,42 +564,81 @@ function wireControls(){
   });
   const onDate=()=>{
     document.querySelectorAll('.preset').forEach(x=>x.setAttribute('aria-pressed','false'));
+    activePreset=null;
     state={from:document.getElementById('d-from').value||null,to:document.getElementById('d-to').value||null};
     render();
   };
   document.getElementById('d-from').addEventListener('change',onDate);
   document.getElementById('d-to').addEventListener('change',onDate);
+  for(const k of ['google','meta']){
+    const b=document.getElementById('ch-'+k);
+    if(b) b.addEventListener('click',()=>{ switchChannel(k); });
+  }
+}
+
+// ---- channels
+function applyChrome(){
+  const c=ch();
+  document.getElementById('subline').textContent=c.subline;
+  document.getElementById('footnote').textContent=c.footnote;
+  for(const k of ['google','meta']){ const b=document.getElementById('ch-'+k); if(b) b.setAttribute('aria-pressed',String(k===CHANNEL)); }
+  if(FEEDERR[CHANNEL]) showBanner(FEEDERR[CHANNEL]); else hideBanner();
+  try{ if(typeof history!=='undefined'&&typeof location!=='undefined') history.replaceState(null,'',CHANNEL==='meta'?'#meta':location.pathname+location.search); }catch(e){}
+}
+function fetchChannel(key){
+  const c=CHANNELS[key];
+  return fetch(c.csvUrl)
+    .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.text(); })
+    .then(t=>loadData(t,c))
+    .catch(e=>{ console.error(e); FEEDERR[key]='We could not load the latest '+c.label+' data. Please refresh to try again.'; return null; });
+}
+function showChannel(){
+  const rows=STORE[CHANNEL];
+  const content=document.getElementById('content');
+  applyChrome();
+  if(!rows){ content.className='loading'; content.textContent=''; document.getElementById('week-ending').textContent='-'; DATA=null; return; }
+  if(!rows.length){ content.className='loading'; content.textContent='No data rows yet.'; document.getElementById('week-ending').textContent='-'; DATA=rows; return; }
+  DATA=rows;
+  const dFrom=document.getElementById('d-from'), dTo=document.getElementById('d-to');
+  dFrom.min=rows[0].endISO; dFrom.max=rows[rows.length-1].endISO;
+  dTo.min=rows[0].endISO;   dTo.max=rows[rows.length-1].endISO;
+  if(activePreset!=null) setWindow(activePreset);   // a preset follows the channel; custom dates stay as typed
+  render();
+}
+function switchChannel(key){
+  if(!CHANNELS[key]||!CHANNELS[key].enabled) return Promise.resolve();
+  const prevKey=CHANNEL;
+  CHANNEL=key;
+  if(STORE[key]!==null||FEEDERR[key]){ showChannel(); return Promise.resolve(); }
+  document.getElementById('content').className='loading';
+  document.getElementById('content').textContent='Loading live data…';
+  return fetchChannel(key).then(rows=>{ STORE[key]=rows; if(CHANNEL===key) showChannel(); });
 }
 
 // test hook for tools/render-sim.cjs (harmless in production)
-window.__apollo={ parseCSV, loadData, windowStats, makePerfChart, sparkSVG, render, setWindow,
+window.__apollo={ parseCSV, loadData, windowStats, makePerfChart, sparkSVG, render, setWindow, switchChannel, CHANNELS,
   get data(){return DATA;}, set data(v){DATA=v;},
   get state(){return state;}, set state(v){state=v;},
   get expanded(){return expanded;},
-  get charts(){return charts;} };
+  get charts(){return charts;},
+  get channel(){return CHANNEL;} };
 
-fetch(CSV_URL)
-  .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.text(); })
-  .then(t=>{
-    const rows=loadData(t);
-    const content=document.getElementById('content');
-    if(!rows) { content.textContent=''; document.getElementById('week-ending').textContent='-'; return; }
-    if(!rows.length){ content.textContent='No data rows yet.'; document.getElementById('week-ending').textContent='-'; return; }
-    DATA=rows;
-    const dFrom=document.getElementById('d-from'), dTo=document.getElementById('d-to');
-    dFrom.min=rows[0].endISO; dFrom.max=rows[rows.length-1].endISO;
-    dTo.min=rows[0].endISO;   dTo.max=rows[rows.length-1].endISO;
+// ---- boot: Google first (always), Meta on demand; #meta deep link opens Meta after Google loads
+(function boot(){
+  const wantMeta=CHANNELS.meta.enabled && typeof location!=='undefined' && /^#meta$/i.test(location.hash||'');
+  if(!CHANNELS.meta.enabled){ const cr=document.getElementById('channelrow'); if(cr) cr.style.display='none'; }
+  fetchChannel('google').then(rows=>{
+    STORE.google=rows;
     wireControls();
-    setWindow(8);
-    render();
-    document.getElementById('controls').style.visibility='visible';   // only after a successful first render
-  })
-  .catch(e=>{
-    console.error(e);
-    document.getElementById('week-ending').textContent='-';
-    document.getElementById('content').className='loading';
-    document.getElementById('content').textContent='We could not load the latest data. Please refresh to try again.';
+    if(rows&&rows.length){
+      DATA=rows; setWindow(8);
+      document.getElementById('controls').style.visibility='visible';   // only after a successful first render
+      if(CHANNELS.meta.enabled) document.getElementById('channelrow').style.visibility='visible';
+    }
+    showChannel();
+    if(wantMeta) switchChannel('meta');
   });
+})();
 </script>
 </body>
 </html>

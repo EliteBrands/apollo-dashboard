@@ -257,10 +257,15 @@ async function main() {
     check('no rows accepted on duplicate week', !t.sandbox.window.__apollo.data);
   }
   {
-    const t = bootPage(csv);   // real CSV currently has empty notes
+    // the live sheet's newest row may or may not carry a published note, so assert
+    // the branch the data actually selects rather than assuming an empty column
+    const t = bootPage(csv);
     await flush();
     const content = t.els.content ? t.els.content.innerHTML : '';
-    check('no note card when the note column is empty', !content.includes('This week from your strategist'));
+    const newest = indieRows(csv).filter(r => Number.isFinite(parseInt(r[0], 10))).pop() || [];
+    const hasNote = !!((newest[22] || '').trim() || (newest[23] || '').trim());
+    if (hasNote) check('note card renders when the sheet carries a note', content.includes('This week from your strategist'));
+    else check('no note card when the note column is empty', !content.includes('This week from your strategist'));
   }
 
   // ---------------- full filter sweep: every (from,to) end-date pair
