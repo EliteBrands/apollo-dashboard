@@ -327,6 +327,14 @@ async function main() {
     check('meta spend axis is not ratio-locked (fits data)', mov && mov.config.options.scales.ySpend.max >= Math.max(...mov.config.data.datasets[0].data.map(v => v || 0)));
     const mhtml = els.content ? els.content.innerHTML : '';
     check('meta tiles: Reach, Link Clicks, Adds to Cart present', ['>Reach<', '>Link Clicks<', '>Adds to Cart<'].every(s => mhtml.includes(s)));
+    // reach is a UNIQUE count: the tile must show the newest week, never the window sum
+    const fmtIndep = v => Math.round(v).toLocaleString('en-US');
+    const latestReach = parseFloat((mind[mind.length - 1] || [])[5] || 0);
+    const sum8Reach = m8.reduce((s, r) => s + parseFloat(r[5] || 0), 0);
+    check('meta Reach tile shows the latest week, not a window sum', mhtml.includes('>' + fmtIndep(latestReach) + '<'), `want >${fmtIndep(latestReach)}<`);
+    if (Math.round(sum8Reach) !== Math.round(latestReach)) {
+      check('meta Reach tile does not show the window sum', !mhtml.includes(fmtIndep(sum8Reach)), `found ${fmtIndep(sum8Reach)}`);
+    }
     check('meta tiles: New Customers absent', !mhtml.includes('New Customers'));
     check('meta market cards: USA, Canada, Australia, Multi-market', ['card-usa', 'card-can', 'card-aus', 'card-multi'].every(s => mhtml.includes(`id="${s}"`)) && !mhtml.includes('card-dg'));
     check('meta market tag shows EB | ALL on multi', mhtml.includes('EB | ALL'));
@@ -391,6 +399,7 @@ async function main() {
     check('channel row visible even when google fails', t.els.channelrow && t.els.channelrow.style.visibility === 'visible');
     await TA.switchChannel('meta'); await flush();
     check('meta renders while google is broken', !!(TA.data && TA.data.length));
+    check('window controls visible on meta when google is broken', t.els.controls && t.els.controls.style.visibility === 'visible');
   }
 
   finish();

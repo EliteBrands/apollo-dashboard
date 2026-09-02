@@ -94,6 +94,9 @@
   .comment b{color:var(--cyan);font-weight:600}
   .mstats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px 12px;margin-top:12px}
   .mkt.expanded .mstats{grid-template-columns:repeat(6,minmax(0,1fr))}
+  /* meta cards carry 6 stats collapsed and 8 expanded - 3 and 4 columns divide both evenly, so no orphan row */
+  .mkt .mstats.meta{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .mkt.expanded .mstats.meta{grid-template-columns:repeat(4,minmax(0,1fr))}
   .ms .k{font-size:10.5px;color:var(--muted)}
   .ms .v{font-family:var(--mono);font-size:14.5px;margin-top:2px}
   .ms .d{font-size:10.5px;margin-top:1px;color:var(--muted)}
@@ -116,6 +119,7 @@
     .tiles.meta{grid-template-columns:repeat(2,minmax(0,1fr))}
     .tile .v{font-size:19px}
     .mkt.expanded .mstats{grid-template-columns:repeat(3,minmax(0,1fr))}
+    .mkt.expanded .mstats.meta{grid-template-columns:repeat(2,minmax(0,1fr))}
     .channelrow .hint{display:none}
   }
 </style>
@@ -215,7 +219,7 @@ const CHANNELS = {
     ],
     targetRoas: null,
     subline: 'Prepared by Elite Brands · Meta Ads · All figures CAD · Meta-reported purchases, 7-day click / 1-day view',
-    footnote: '· Performance Marketing · Data: Meta Marketing API, Meta-reported purchases (7-day click / 1-day view). Meta figures do not add to Google figures. Market reach is summed across campaigns · Questions: reply to your weekly email',
+    footnote: '· Performance Marketing · Data: Meta Marketing API, Meta-reported purchases (7-day click / 1-day view). Meta figures do not add to Google figures. Reach is a weekly unique count; market reach is summed across campaigns · Questions: reply to your weekly email',
     noteTitle: 'This week from your Meta team', byline: 'Joshua and Sam · Elite Brands', commentLabel: 'Meta team:',
     chartTitle: 'Revenue, Spend and ROAS · all markets',
   },
@@ -447,6 +451,8 @@ function render(){
 
   let html='';
   if(c.key==='meta'){
+    // reach is a UNIQUE count, so it cannot be summed across weeks: the Reach tile
+    // shows the latest week only and compares it to the week before
     const wkReach=wk.reach, wkClicks=wk.clicks, wkAtc=wk.atc;
     html+=`<div class="tiles meta">
     <div class="tile"><div class="k">Ad Spend</div><div class="v">${fmt$(W.spend)}</div><div class="s">this week ${fmt$(wk.spend)} ${deltaSpan(pctDelta(wk.spend,pv&&pv.spend),'none')}</div></div>
@@ -454,7 +460,7 @@ function render(){
     <div class="tile hl"><div class="k">ROAS</div><div class="v">${fmtX(W.roas)}</div><div class="s">this week ${fmtX(wkRoas)} ${deltaSpan(pctDelta(wkRoas,(pv&&pv.spend>0&&pv.revenue!=null)?pv.revenue/pv.spend:null),'up')}</div></div>
     <div class="tile"><div class="k">Purchases</div><div class="v">${fmtI(W.pur)}</div><div class="s">this week ${fmtI(wk.purchases)} ${deltaSpan(pctDelta(wk.purchases,pv&&pv.purchases),'up')}</div></div>
     <div class="tile"><div class="k">Cost / Purchase</div><div class="v">${W.cpa==null?'-':'$'+Math.round(W.cpa)}</div><div class="s">this week ${wkCpa==null?'-':'$'+Math.round(wkCpa)} ${deltaSpan(pctDelta(wkCpa,pv&&pv.purchases>0?pv.spend/pv.purchases:null),'down')}</div></div>
-    <div class="tile"><div class="k">Reach</div><div class="v">${fmtI(W.reach)}</div><div class="s">this week ${fmtI(wkReach)} ${deltaSpan(pctDelta(wkReach,pv&&pv.reach),'none')}</div></div>
+    <div class="tile"><div class="k">Reach</div><div class="v">${fmtI(wkReach)}</div><div class="s">prior week ${fmtI(pv&&pv.reach)} ${deltaSpan(pctDelta(wkReach,pv&&pv.reach),'none')}</div></div>
     <div class="tile"><div class="k">Link Clicks</div><div class="v">${fmtI(W.clicks)}</div><div class="s">this week ${fmtI(wkClicks)} ${deltaSpan(pctDelta(wkClicks,pv&&pv.clicks),'up')}</div></div>
     <div class="tile"><div class="k">Adds to Cart</div><div class="v">${fmtI(W.atc)}</div><div class="s">this week ${fmtI(wkAtc)} ${deltaSpan(pctDelta(wkAtc,pv&&pv.atc),'up')}</div></div>
   </div>`;
@@ -514,7 +520,7 @@ function render(){
         <button class="expandbtn" data-expand="${B.key}" aria-expanded="${isX}">${isX?'Collapse':'Expand'} ${chevron(isX)}</button>
       </div>
       ${comment?`<div class="comment"><b>${c.commentLabel}</b> ${comment}</div>`:''}
-      <div class="mstats">
+      <div class="mstats${c.key==='meta'?' meta':''}">
         ${statCell('Spend',fmt$(m.spend),deltaSpan(pctDelta(m.spend,mp&&mp.spend),'none'))}
         ${statCell('Revenue',fmt$(m.revenue),deltaSpan(pctDelta(m.revenue,mp&&mp.revenue),'up'))}
         ${statCell('Purchases',fmtI(m.purchases),deltaSpan(pctDelta(m.purchases,mp&&mp.purchases),'up'))}
@@ -601,6 +607,9 @@ function showChannel(){
   if(!rows){ content.className='loading'; content.textContent=''; document.getElementById('week-ending').textContent='-'; DATA=null; return; }
   if(!rows.length){ content.className='loading'; content.textContent='No data rows yet.'; document.getElementById('week-ending').textContent='-'; DATA=rows; return; }
   DATA=rows;
+  // any healthy channel unlocks the window controls - gating this on google alone
+  // left the controls hidden on a working meta view whenever the google feed broke
+  if(rows&&rows.length) document.getElementById('controls').style.visibility='visible';
   const dFrom=document.getElementById('d-from'), dTo=document.getElementById('d-to');
   dFrom.min=rows[0].endISO; dFrom.max=rows[rows.length-1].endISO;
   dTo.min=rows[0].endISO;   dTo.max=rows[rows.length-1].endISO;
