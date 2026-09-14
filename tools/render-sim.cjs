@@ -377,10 +377,13 @@ async function main() {
   {
     // the page SHIPS with CHANNELS.mer.enabled:false (launch switch). Prove the switch
     // holds at boot, then flip it in the sandbox so the view itself can be exercised.
-    check('shipped flag: mer pill hidden at boot (enabled:false)', A.CHANNELS.mer.enabled === false && !!els['ch-mer'] && els['ch-mer'].style.display === 'none', `display=${els['ch-mer'] && els['ch-mer'].style.display}`);
+    const shippedOn = A.CHANNELS.mer.enabled === true;   // whichever way the launch switch is set, the pill must MATCH it
+    check('shipped flag: mer pill visibility matches CHANNELS.mer.enabled at boot', !!els['ch-mer'] && (shippedOn ? els['ch-mer'].style.display !== 'none' : els['ch-mer'].style.display === 'none'), `enabled=${shippedOn} display=${els['ch-mer'] && els['ch-mer'].style.display}`);
+    check('channel hint matches the number of pills on screen', (shippedOn ? (!!els['channelhint'] && /Three views/.test(els['channelhint'].textContent)) : !(els['channelhint'] && /Three views/.test(els['channelhint'].textContent || ''))), `hint=${els['channelhint'] && els['channelhint'].textContent}`);
     const before = A.channel;
     await A.switchChannel('mer'); await flush();
-    check('shipped flag: switchChannel(mer) is a no-op while disabled', A.channel === before, `channel=${A.channel}`);
+    check('shipped flag: switchChannel(mer) is a no-op while disabled (or opens it when enabled)', shippedOn ? A.channel === 'mer' : A.channel === before, `channel=${A.channel}`);
+    if (shippedOn) { await A.switchChannel('google'); await flush(); }
     A.CHANNELS.mer.enabled = true;   // launch switch flipped for the rest of this section
     await A.switchChannel('google'); await flush();
     const gRows = A.data;
@@ -405,7 +408,7 @@ async function main() {
     check('mer USA card spend = Google USA Spend + Meta USA Spend', Math.abs(A.windowStats(last4, 'usa').spend - iUsaSpend) < 0.01);
     const lastRow = last4[last4.length - 1];
     // AU store not connected yet: the AUS cell is blank and must stay null (never 0)
-    check('newest mer row: aus.revenue is null, usa/can revenue are numbers', lastRow && lastRow.aus.revenue === null && typeof lastRow.usa.revenue === 'number' && typeof lastRow.can.revenue === 'number', lastRow && JSON.stringify({ usa: lastRow.usa.revenue, can: lastRow.can.revenue, aus: lastRow.aus.revenue }));
+    check('newest mer row: aus.revenue is null (not connected) or a number, usa/can revenue are numbers', lastRow && (lastRow.aus.revenue === null || typeof lastRow.aus.revenue === 'number') && typeof lastRow.usa.revenue === 'number' && typeof lastRow.can.revenue === 'number', lastRow && JSON.stringify({ usa: lastRow.usa.revenue, can: lastRow.can.revenue, aus: lastRow.aus.revenue }));
     const iAllRev = parseFloat(R.get(lastRow.week)[10]);
     check('newest mer row: all.revenue is the sheet ALL Revenue cell, not usa+can+aus', Math.abs(lastRow.all.revenue - iAllRev) < 0.01, `${lastRow.all.revenue} vs ${iAllRev}`);
     const dgMulti = parseFloat(G.get(lastRow.week)[18] || 0) + parseFloat(M.get(lastRow.week)[26] || 0);
@@ -419,7 +422,8 @@ async function main() {
     const rhtml = els.content ? els.content.innerHTML : '';
     check('mer tiles: Ad Spend, Revenue, MER, Orders present', ['>Ad Spend<', '>Revenue<', '>MER<', '>Orders<'].every(s => rhtml.includes(s)));
     check('mer tiles: no ROAS, no Cost / Purchase, no New Customers, no Purchases', !['>ROAS<', 'Cost / Purchase', 'New Customers', '>Purchases<'].some(s => rhtml.includes(s)));
-    check('mer rate line shows both rates', /1 USD = \d\.\d{4} CAD/.test(rhtml) && /1 AUD = \d\.\d{4} CAD/.test(rhtml));
+    check('mer rate line shows both rates', /1 USD = \d\.\d{3} CAD/.test(rhtml) && /1 AUD = \d\.\d{3} CAD/.test(rhtml));
+    check('mer window revenue for a not-connected market is null, never 0', (() => { const w = A.windowStats(last4, 'aus'); return lastRow.aus.revenue === null ? (w.rev === null && w.roas === null) : typeof w.rev === 'number'; })());
     check('mer market cards: USA, CAN, AUS only', ['card-usa', 'card-can', 'card-aus'].every(s => rhtml.includes(`id="${s}"`)) && !rhtml.includes('card-dg') && !rhtml.includes('card-multi'));
     check('mer view has no note card', !rhtml.includes('notecard'));
     await A.switchChannel('google'); await flush();

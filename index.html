@@ -51,6 +51,8 @@
   .channel[aria-pressed="true"] .mark{border-color:transparent;background:rgba(5,8,22,.18)}
   .channelrow .hint{margin-left:auto;font-size:12px;color:var(--muted)}
   .tiles.meta{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .tiles.mer{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .rateline{font-size:12px;color:var(--muted);margin:8px 2px 4px}
 
   .tiles{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px}
   .tile{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:16px 18px}
@@ -97,6 +99,8 @@
   /* meta cards carry 6 stats collapsed and 8 expanded - 3 and 4 columns divide both evenly, so no orphan row */
   .mkt .mstats.meta{grid-template-columns:repeat(3,minmax(0,1fr))}
   .mkt.expanded .mstats.meta{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .mkt .mstats.mer{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .mkt.expanded .mstats.mer{grid-template-columns:repeat(4,minmax(0,1fr))}
   .ms .k{font-size:10.5px;color:var(--muted)}
   .ms .v{font-family:var(--mono);font-size:14.5px;margin-top:2px}
   .ms .d{font-size:10.5px;margin-top:1px;color:var(--muted)}
@@ -117,9 +121,11 @@
     h1{font-size:22px}
     .tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
     .tiles.meta{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .tiles.mer{grid-template-columns:repeat(2,minmax(0,1fr))}
     .tile .v{font-size:19px}
     .mkt.expanded .mstats{grid-template-columns:repeat(3,minmax(0,1fr))}
     .mkt.expanded .mstats.meta{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .mkt.expanded .mstats.mer{grid-template-columns:repeat(2,minmax(0,1fr))}
     .channelrow .hint{display:none}
   }
 </style>
@@ -146,7 +152,7 @@
     <button class="channel" id="ch-google" data-channel="google" aria-pressed="true"><span class="mark">G</span>Google Ads</button>
     <button class="channel" id="ch-meta" data-channel="meta" aria-pressed="false"><span class="mark">M</span>Meta Ads</button>
     <button class="channel" id="ch-mer" data-channel="mer" aria-pressed="false"><span class="mark">Σ</span>Total MER</button>
-    <span class="hint">Three views, one report. Each ad channel counts its own sales. Total MER counts store sales against all ad spend.</span>
+    <span class="hint" id="channelhint">Two views, one report. Each channel counts its own sales.</span>
   </div>
 
   <div class="controls" id="controls" style="visibility:hidden">
@@ -243,7 +249,7 @@ const CHANNELS = {
     ],
     targetRoas: null, ratioLabel:'MER',
     subline: 'Prepared by Elite Brands · Total MER · All figures CAD · Revenue: Shopify orders, all three stores, converted at Bank of Canada weekly rates',
-    footnote: '· Performance Marketing · Ad Spend = Google Ads + Meta Ads. MER = Revenue / Ad Spend. Revenue = store order value after discounts, before shipping and tax, converted to CAD at Bank of Canada weekly average rates (these differ slightly from the rates Google applies). A market whose store is not yet connected shows no revenue and is left out of the total. Google Demand Gen and Meta multi-market spend count in the total only, not in a market card · Questions: reply to your weekly email',
+    footnote: '· Performance Marketing · Ad Spend = Google Ads + Meta Ads. MER = store revenue divided by ad spend. Revenue = Shopify orders after discounts, before shipping and tax, in CAD at Bank of Canada weekly rates. Demand Gen and multi-market spend count in the total only. A country whose store is not yet connected shows no revenue but its ad spend still counts, so Total MER reads low until it connects · Questions: reply to your weekly email',
     noteTitle: '', byline: '', commentLabel: '',
     chartTitle: 'Revenue, Ad Spend and MER · all markets · both channels',
   },
@@ -390,7 +396,10 @@ function buildMerRows(merRaw,googleRows,metaRows){
   for(const r of merRaw){
     const g=G.get(r.week), m=M.get(r.week);
     if(!g||!m){ dropped.push(r.week); continue; }
-    const spend=b=>n0(g[b]&&g[b].spend)+n0(m[b]&&m[b].spend);
+    // a blank spend cell in either ad tab is UNKNOWN, never 0: the bucket's spend stays null
+    // (renders "-") and a week with unknown ALL spend is dropped like a missing row
+    const spend=b=>{ const gs=g[b]&&g[b].spend, ms=m[b]&&m[b].spend; return (gs==null||ms==null)?null:gs+ms; };
+    if(spend('all')==null){ dropped.push(r.week); continue; }
     const row={ week:r.week, label:r.label, endISO:r.endISO, fx:r.fx, note:'', bullets:'', comments:{usa:'',can:'',aus:''} };
     row.all={ spend:spend('all'), revenue:r.rev.all, purchases:r.orders };
     for(const b of ['usa','can','aus']) row[b]={ spend:spend(b), revenue:r.rev[b], purchases:null };
@@ -404,9 +413,13 @@ function buildMerRows(merRaw,googleRows,metaRows){
 const sumN=a=>a.reduce((s,v)=>s+(v||0),0);
 function windowStats(rows,bucket){
   const g=f=>sumN(rows.map(r=>r[bucket][f]));
-  const spend=g('spend'), rev=g('revenue'), pur=g('purchases'), nc=g('newcust');
+  const spend=g('spend'), pur=g('purchases'), nc=g('newcust');
+  // MER only: a window where every revenue cell is blank (store not connected) has NO revenue, not $0.
+  // Google and Meta keep their original $0 reading so those views stay byte-identical.
+  const anyRev=CHANNEL!=='mer'||rows.some(r=>r[bucket].revenue!=null);
+  const rev=anyRev?g('revenue'):null;
   return { spend, rev, pur, nc, reach:g('reach'), clicks:g('clicks'), atc:g('atc'),
-    roas: spend>0?rev/spend:null, cpa: pur>0?spend/pur:null, ncPct: pur>0?nc/pur:null };
+    roas: (spend>0&&rev!=null)?rev/spend:null, cpa: pur>0?spend/pur:null, ncPct: pur>0?nc/pur:null };
 }
 
 // ---- charts
@@ -518,13 +531,13 @@ function render(){
   let html='';
   if(c.key==='mer'){
     const fx=latest.fx||{};
-    html+=`<div class="tiles">
+    html+=`<div class="tiles mer">
     <div class="tile"><div class="k">Ad Spend</div><div class="v">${fmt$(W.spend)}</div><div class="s">this week ${fmt$(wk.spend)} ${deltaSpan(pctDelta(wk.spend,pv&&pv.spend),'none')}</div></div>
     <div class="tile"><div class="k">Revenue</div><div class="v">${fmt$(W.rev)}</div><div class="s">this week ${fmt$(wk.revenue)} ${deltaSpan(pctDelta(wk.revenue,pv&&pv.revenue),'up')}</div></div>
-    <div class="tile hl"><div class="k">MER</div><div class="v">${fmtX(W.roas)}</div><div class="s">this week ${fmtX(wkRoas)} ${deltaSpan(pctDelta(wkRoas,(pv&&pv.spend>0&&pv.revenue!=null)?pv.revenue/pv.spend:null),'up')}</div></div>
+    <div class="tile hl"><div class="k" title="Store revenue per $1 of ad spend">MER</div><div class="v">${fmtX(W.roas)}</div><div class="s">this week ${fmtX(wkRoas)} ${deltaSpan(pctDelta(wkRoas,(pv&&pv.spend>0&&pv.revenue!=null)?pv.revenue/pv.spend:null),'up')}</div></div>
     <div class="tile"><div class="k">Orders</div><div class="v">${fmtI(W.pur)}</div><div class="s">this week ${fmtI(wk.purchases)} ${deltaSpan(pctDelta(wk.purchases,pv&&pv.purchases),'up')}</div></div>
   </div>
-  <div class="sub" style="margin:-6px 0 14px">Rates this week: 1 USD = ${fx.usdcad==null?'-':fx.usdcad.toFixed(4)} CAD · 1 AUD = ${fx.audcad==null?'-':fx.audcad.toFixed(4)} CAD · Google Demand Gen and Meta multi-market spend are in the total only</div>`;
+  ${(()=>{ const parts=[]; if(fx.usdcad!=null) parts.push('1 USD = '+fx.usdcad.toFixed(3)+' CAD'); if(fx.audcad!=null) parts.push('1 AUD = '+fx.audcad.toFixed(3)+' CAD'); return parts.length?`<div class="rateline">Rates for week ending ${longEnd(latest.label)}: ${parts.join(' · ')}</div>`:''; })()}`;
   } else if(c.key==='meta'){
     // reach is a UNIQUE count, so it cannot be summed across weeks: the Reach tile
     // shows the latest week only and compares it to the week before
@@ -562,7 +575,7 @@ function render(){
       </div>
       <button class="expandbtn" data-expand="overview" aria-expanded="${expanded.overview}">${expanded.overview?'Collapse':'Expand'} ${chevron(expanded.overview)}</button>
     </div>
-    <div class="chartbox"><canvas id="chart-overview" role="img" aria-label="Weekly revenue, spend and ROAS chart, all markets"></canvas></div>
+    <div class="chartbox"><canvas id="chart-overview" role="img" aria-label="Weekly revenue, spend and ${c.ratioLabel||'ROAS'} chart, all markets"></canvas></div>
   </div>`;
 
   if(note||bullets.length){
@@ -595,7 +608,7 @@ function render(){
         <button class="expandbtn" data-expand="${B.key}" aria-expanded="${isX}">${isX?'Collapse':'Expand'} ${chevron(isX)}</button>
       </div>
       ${comment?`<div class="comment"><b>${c.commentLabel}</b> ${comment}</div>`:''}
-      <div class="mstats${c.key==='meta'?' meta':''}">
+      <div class="mstats${c.key==='meta'?' meta':(c.key==='mer'?' mer':'')}">
         ${statCell('Spend',fmt$(m.spend),deltaSpan(pctDelta(m.spend,mp&&mp.spend),'none'))}
         ${statCell('Revenue',fmt$(m.revenue),deltaSpan(pctDelta(m.revenue,mp&&mp.revenue),'up'))}
         ${c.key==='mer'?statCell('MER',fmtX(mRoas),deltaSpan(pctDelta(mRoas,mpRoas),'up')):statCell('Purchases',fmtI(m.purchases),deltaSpan(pctDelta(m.purchases,mp&&mp.purchases),'up'))}
@@ -607,7 +620,7 @@ function render(){
         ${isX&&c.key==='google'?statCell('New Customers',fmtP(mNc),'this week'):''}
       </div>
       ${sparkSVG(rows.map(r=>r[B.key].revenue))}
-      <div class="chartbox"><canvas id="chart-${B.key}" role="img" aria-label="${B.name} weekly revenue, spend and ROAS chart"></canvas></div>
+      <div class="chartbox"><canvas id="chart-${B.key}" role="img" aria-label="${B.name} weekly revenue, spend and ${c.ratioLabel||'ROAS'} chart"></canvas></div>
       <div class="mfoot">${rows.length}-week window: ${fmt$(mW.spend)} spend · ${fmt$(mW.rev)} revenue · ${fmtX(mW.roas)}${B.foot}</div>
     </div>`;
   }
@@ -730,6 +743,8 @@ window.__apollo={ parseCSV, loadData, buildMerRows, windowStats, makePerfChart, 
   if(!CHANNELS.meta.enabled){ const cr=document.getElementById('channelrow'); if(cr) cr.style.display='none'; }
   // a disabled non-default channel keeps its pill out of the row (same pattern as the channelrow hide above)
   for(const k of Object.keys(CHANNELS)){ if(k==='google'||CHANNELS[k].enabled) continue; const b=document.getElementById('ch-'+k); if(b) b.style.display='none'; }
+  // the hint describes the pills that are actually on screen
+  if(CHANNELS.mer.enabled){ const h=document.getElementById('channelhint'); if(h) h.textContent='Three views, one report. Each ad channel counts its own sales. Total MER counts all store sales against all ad spend.'; }
   fetchChannel('google').then(rows=>{
     STORE.google=rows;
     wireControls();
