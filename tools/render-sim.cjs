@@ -11,8 +11,9 @@
  * filter sweep over every window.
  *
  *   node tools/render-sim.cjs                 fetch the live sheet
- *   node tools/render-sim.cjs <google.csv> <meta.csv>   use saved CSV snapshots
+ *   node tools/render-sim.cjs <google.csv> <meta.csv> [mer.csv]   use saved CSV snapshots
  *   RENDER_SIM_PAGE=<file> node tools/...     point at a mutated page copy
+ *   RENDER_SIM_MER_CSV=<file>                 local Total MER CSV (argv[4] wins)
  */
 const fs = require('fs');
 const path = require('path');
@@ -75,7 +76,7 @@ function makeElement(id) {
   return el;
 }
 
-function bootPage(csvText, metaCsvText) {
+function bootPage(csvText, metaCsvText, merCsvText) {
   const html = fs.readFileSync(PAGE, 'utf8');
   const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]);
   if (!scripts.length) throw new Error('no inline <script> found in page');
@@ -94,7 +95,10 @@ function bootPage(csvText, metaCsvText) {
   };
   const sandbox = {
     window: {}, document: documentStub, Chart: ChartStub,
-    fetch: (url) => Promise.resolve({ ok: true, text: () => Promise.resolve(String(url).includes('sheet=Meta') ? (metaCsvText == null ? csvText : metaCsvText) : csvText) }),
+    fetch: (url) => Promise.resolve({ ok: true, text: () => Promise.resolve(
+      String(url).includes('sheet=Total%20MER') ? (merCsvText == null ? '<html>no mer fixture</html>' : merCsvText)
+      : String(url).includes('sheet=Meta') ? (metaCsvText == null ? csvText : metaCsvText)
+      : csvText) }),
     console, setTimeout, clearTimeout, Event: function () {},
   };
   sandbox.globalThis = sandbox;
@@ -133,10 +137,13 @@ async function main() {
   const LOCAL_META_CSV = process.argv[3] || null;
   const metaUrl = csvUrl.replace('&sheet=Sheet1', '&sheet=Meta');
   const metaCsv = LOCAL_META_CSV ? fs.readFileSync(LOCAL_META_CSV, 'utf8') : await fetchCSV(metaUrl);
+  const LOCAL_MER_CSV = process.argv[4] || process.env.RENDER_SIM_MER_CSV || null;
+  const merUrl = csvUrl.replace('&sheet=Sheet1', '&sheet=Total%20MER');
+  const merCsv = LOCAL_MER_CSV ? fs.readFileSync(LOCAL_MER_CSV, 'utf8') : await fetchCSV(merUrl);
 
   // ---------------- boot against the real CSV
   section('boot + parse (real CSV)');
-  const { sandbox, els, createdCharts } = bootPage(csv, metaCsv);
+  const { sandbox, els, createdCharts } = bootPage(csv, metaCsv, merCsv);
   await flush();
   const A = sandbox.window.__apollo;
   check('__apollo hook exposed', !!A);
@@ -358,9 +365,91 @@ async function main() {
     if (TA && TA.switchChannel) { await TA.switchChannel('meta'); await flush(); }
     const content = t.els.content ? t.els.content.innerHTML : '';
     check('meta note card renders with the Meta team title', content.includes('This week from your Meta team') && content.includes('Meta lead note.'));
-    check('meta byline names Joshua and Sam', content.includes('Joshua and Sam'));
+    check('meta byline names Sam', content.includes('Sam · Elite Brands'));
     check('2 meta win bullets render', (content.match(/class="win"/g) || []).length === 2);
     check('all 4 meta market comments render', ['USA meta comment.', 'CAN meta comment.', 'AUS meta comment.', 'MULTI meta comment.'].every(s => content.includes(s)));
+  }
+
+  // ---------------- Total MER channel (v3)
+  section('total mer channel');
+  check('CHANNELS.mer present and pinned to sheet=Total%20MER', !!(A.CHANNELS.mer && String(A.CHANNELS.mer.csvUrl).includes('&sheet=Total%20MER')));
+  check('page exposes buildMerRows', typeof A.buildMerRows === 'function');
+  {
+    // the page SHIPS with CHANNELS.mer.enabled:false (launch switch). Prove the switch
+    // holds at boot, then flip it in the sandbox so the view itself can be exercised.
+    check('shipped flag: mer pill hidden at boot (enabled:false)', A.CHANNELS.mer.enabled === false && !!els['ch-mer'] && els['ch-mer'].style.display === 'none', `display=${els['ch-mer'] && els['ch-mer'].style.display}`);
+    const before = A.channel;
+    await A.switchChannel('mer'); await flush();
+    check('shipped flag: switchChannel(mer) is a no-op while disabled', A.channel === before, `channel=${A.channel}`);
+    A.CHANNELS.mer.enabled = true;   // launch switch flipped for the rest of this section
+    await A.switchChannel('google'); await flush();
+    const gRows = A.data;
+    await A.switchChannel('mer'); await flush();
+    check('channel is mer after switch', A.channel === 'mer');
+    const rrows = A.data || [];
+    check('mer rows parsed (>= 4 weeks)', rrows.length >= 4, `got ${rrows.length}`);
+    check('banner not shown on clean mer feed', !(els.banner && els.banner.style.display === 'block'));
+    const gind = indieRows(csv).slice(1).filter(r => Number.isFinite(parseInt(r[0], 10)));
+    const mind = indieRows(metaCsv).slice(1).filter(r => Number.isFinite(parseInt(r[0], 10)));
+    const rind = indieRows(merCsv).slice(1).filter(r => Number.isFinite(parseInt(r[0], 10)));
+    const byWk = (arr) => new Map(arr.map(r => [parseInt(r[0], 10), r]));
+    const G = byWk(gind), M = byWk(mind), R = byWk(rind);
+    const last4 = rrows.slice(-4);
+    const iSpend = last4.reduce((s, r) => s + parseFloat(G.get(r.week)[2] || 0) + parseFloat(M.get(r.week)[2] || 0), 0);
+    const iRev = last4.reduce((s, r) => s + parseFloat(R.get(r.week)[10] || 0), 0);
+    const iUsaSpend = last4.reduce((s, r) => s + parseFloat(G.get(r.week)[6] || 0) + parseFloat(M.get(r.week)[8] || 0), 0);
+    const RW = A.windowStats(last4, 'all');
+    check('mer Ad Spend = Google ALL Spend + Meta ALL Spend (independent sum)', Math.abs(RW.spend - iSpend) < 0.01, `${RW.spend} vs ${iSpend}`);
+    check('mer Revenue = Total MER ALL Revenue (column 11)', Math.abs(RW.rev - iRev) < 0.01, `${RW.rev} vs ${iRev}`);
+    check('MER is sum(rev)/sum(spend)', Math.abs(RW.roas - iRev / iSpend) < 1e-9);
+    check('mer USA card spend = Google USA Spend + Meta USA Spend', Math.abs(A.windowStats(last4, 'usa').spend - iUsaSpend) < 0.01);
+    const lastRow = last4[last4.length - 1];
+    // AU store not connected yet: the AUS cell is blank and must stay null (never 0)
+    check('newest mer row: aus.revenue is null, usa/can revenue are numbers', lastRow && lastRow.aus.revenue === null && typeof lastRow.usa.revenue === 'number' && typeof lastRow.can.revenue === 'number', lastRow && JSON.stringify({ usa: lastRow.usa.revenue, can: lastRow.can.revenue, aus: lastRow.aus.revenue }));
+    const iAllRev = parseFloat(R.get(lastRow.week)[10]);
+    check('newest mer row: all.revenue is the sheet ALL Revenue cell, not usa+can+aus', Math.abs(lastRow.all.revenue - iAllRev) < 0.01, `${lastRow.all.revenue} vs ${iAllRev}`);
+    const dgMulti = parseFloat(G.get(lastRow.week)[18] || 0) + parseFloat(M.get(lastRow.week)[26] || 0);
+    const cardSum = ['usa', 'can', 'aus'].reduce((s, b) => s + lastRow[b].spend, 0);
+    check('DG + MULTI spend sits in ALL but not in any market card', Math.abs((lastRow.all.spend - cardSum) - dgMulti) < 0.01, `${lastRow.all.spend - cardSum} vs ${dgMulti}`);
+    for (const k of ['overview', 'usa', 'can', 'aus']) A.expanded[k] = false;
+    A.setWindow(8); A.render();
+    const rlive = createdCharts.filter(c => !c.destroyed);
+    check('mer: exactly 1 chart when nothing expanded', rlive.length === 1, `got ${rlive.length}`);
+    check('mer overview has 3 datasets, ratio dataset labelled MER, no target', rlive[0] && rlive[0].config.data.datasets.length === 3 && rlive[0].config.data.datasets.some(d => d.label === 'MER'));
+    const rhtml = els.content ? els.content.innerHTML : '';
+    check('mer tiles: Ad Spend, Revenue, MER, Orders present', ['>Ad Spend<', '>Revenue<', '>MER<', '>Orders<'].every(s => rhtml.includes(s)));
+    check('mer tiles: no ROAS, no Cost / Purchase, no New Customers, no Purchases', !['>ROAS<', 'Cost / Purchase', 'New Customers', '>Purchases<'].some(s => rhtml.includes(s)));
+    check('mer rate line shows both rates', /1 USD = \d\.\d{4} CAD/.test(rhtml) && /1 AUD = \d\.\d{4} CAD/.test(rhtml));
+    check('mer market cards: USA, CAN, AUS only', ['card-usa', 'card-can', 'card-aus'].every(s => rhtml.includes(`id="${s}"`)) && !rhtml.includes('card-dg') && !rhtml.includes('card-multi'));
+    check('mer view has no note card', !rhtml.includes('notecard'));
+    await A.switchChannel('google'); await flush();
+    check('switching back restores google rows untouched', A.channel === 'google' && A.data === gRows);
+  }
+  {
+    // join rule: a Total MER week with no matching Meta row is dropped, never shown with partial spend
+    const merRecs = indieRows(merCsv);
+    const li = merRecs.length - 1;
+    const orphan = merRecs[li].slice(); orphan[0] = String(parseInt(orphan[0], 10) + 500); orphan[1] = '01/07/2099 - 01/13/2099';
+    const orphanCsv = [...merRecs, orphan].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const t = bootPage(csv, metaCsv, orphanCsv);
+    await flush();
+    const TA = t.sandbox.window.__apollo;
+    TA.CHANNELS.mer.enabled = true;   // launch switch
+    await TA.switchChannel('mer'); await flush();
+    const weeks = (TA.data || []).map(r => r.week);
+    check('orphan mer week (no ad rows) is dropped from the joined rows', !weeks.includes(parseInt(orphan[0], 10)));
+  }
+  {
+    // a broken Total MER feed must banner ONLY on the mer view
+    const t = bootPage(csv, metaCsv, '<html>broken</html>');
+    await flush();
+    const TA = t.sandbox.window.__apollo;
+    TA.CHANNELS.mer.enabled = true;   // launch switch
+    check('google renders with a broken mer feed', !!(TA.data && TA.data.length) && !(t.els.banner && t.els.banner.style.display === 'block'));
+    await TA.switchChannel('mer'); await flush();
+    check('mer banner shows once mer is opened', t.els.banner && t.els.banner.style.display === 'block');
+    await TA.switchChannel('meta'); await flush();
+    check('meta view is clean after a mer failure', !(t.els.banner && t.els.banner.style.display === 'block') && TA.data && TA.data.length > 0);
   }
 
   // ---------------- banner isolation: a broken Meta feed must not hide Google

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- apollo-dashboard v2.0.0 -->
+<!-- apollo-dashboard v3.0.0 -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -145,7 +145,8 @@
     <span class="k">Channel</span>
     <button class="channel" id="ch-google" data-channel="google" aria-pressed="true"><span class="mark">G</span>Google Ads</button>
     <button class="channel" id="ch-meta" data-channel="meta" aria-pressed="false"><span class="mark">M</span>Meta Ads</button>
-    <span class="hint">Two views, one report. Each channel counts its own sales.</span>
+    <button class="channel" id="ch-mer" data-channel="mer" aria-pressed="false"><span class="mark">Σ</span>Total MER</button>
+    <span class="hint">Three views, one report. Each ad channel counts its own sales. Total MER counts store sales against all ad spend.</span>
   </div>
 
   <div class="controls" id="controls" style="visibility:hidden">
@@ -223,6 +224,29 @@ const CHANNELS = {
     noteTitle: 'This week from your Meta team', byline: 'Sam · Elite Brands', commentLabel: 'Meta team:',
     chartTitle: 'Revenue, Spend and ROAS · all markets',
   },
+  mer: {
+    key:'mer', label:'Total MER', enabled:false, derived:true,   // derived: rows are built from this tab + google + meta · enabled: flip to true when the AU store is connected and the Total MER tab is backfilled
+    csvUrl: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Total%20MER`,
+    headers: [
+      'Week','Date Range',
+      'USA Revenue USD','CAN Revenue CAD','AUS Revenue AUD',
+      'FX USDCAD','FX AUDCAD',
+      'USA Revenue','CAN Revenue','AUS Revenue','ALL Revenue',
+      'Orders',
+    ],
+    fields: ['spend','revenue','purchases'],
+    bucketKeys: ['all','usa','can','aus'],
+    buckets: [
+      { key:'usa', name:'United States', tag:'Google + Meta · US store', foot:'' },
+      { key:'can', name:'Canada',        tag:'Google + Meta · CA store', foot:'' },
+      { key:'aus', name:'Australia',     tag:'Google + Meta · AU store', foot:' · small volumes swing weekly' },
+    ],
+    targetRoas: null, ratioLabel:'MER',
+    subline: 'Prepared by Elite Brands · Total MER · All figures CAD · Revenue: Shopify orders, all three stores, converted at Bank of Canada weekly rates',
+    footnote: '· Performance Marketing · Ad Spend = Google Ads + Meta Ads. MER = Revenue / Ad Spend. Revenue = store order value after discounts, before shipping and tax, converted to CAD at Bank of Canada weekly average rates (these differ slightly from the rates Google applies). A market whose store is not yet connected shows no revenue and is left out of the total. Google Demand Gen and Meta multi-market spend count in the total only, not in a market card · Questions: reply to your weekly email',
+    noteTitle: '', byline: '', commentLabel: '',
+    chartTitle: 'Revenue, Ad Spend and MER · all markets · both channels',
+  },
 };
 let CHANNEL='google';
 const ch = () => CHANNELS[CHANNEL];
@@ -273,8 +297,8 @@ const longEnd = label => { const [mm,dd,yy]=(label.split(' - ')[1]||'').split('/
 
 // ---- data load
 let DATA=null;           // rows of the ACTIVE channel
-const STORE={google:null,meta:null};        // parsed rows per channel (null = not loaded or failed)
-const FEEDERR={google:'',meta:''};          // banner text per channel ('' = healthy)
+const STORE={google:null,meta:null,mer:null};        // parsed rows per channel (null = not loaded or failed)
+const FEEDERR={google:'',meta:'',mer:''};            // banner text per channel ('' = healthy)
 let charts=[];           // live Chart instances, destroyed on every rebuild
 let state={from:null,to:null};   // ISO end-date bounds
 let activePreset=8;              // 8 | 12 | 26 | 'all' | null (null = custom dates)
@@ -310,6 +334,27 @@ function loadData(text,c){
       return null;
     }
   }
+  if(c.derived){
+    const raw=[]; const seen=new Set();
+    for(const cells of recs.slice(1)){
+      if(cells.length<c.headers.length) continue;
+      const week=parseInt(cells[0],10);
+      if(!Number.isFinite(week)) continue;
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(endISO(cells[1]))){ console.warn(`row for week ${week} skipped: unreadable date range "${cells[1]}"`); continue; }
+      if(seen.has(week)){
+        showBanner('This report\'s '+c.label+' data feed needs attention (a week appears twice), so those figures are hidden. Please let your Elite Brands team know.',c.key);
+        console.error(`Duplicate week number ${week} in the ${c.key} sheet tab.`);
+        return null;
+      }
+      seen.add(week);
+      raw.push({ week, label:cells[1], endISO:endISO(cells[1]),
+        rev:{ usa:nullableNum(cells[7]), can:nullableNum(cells[8]), aus:nullableNum(cells[9]), all:nullableNum(cells[10]) },
+        fx:{ usdcad:nullableNum(cells[5]), audcad:nullableNum(cells[6]) },
+        orders:nullableNum(cells[11]) });
+    }
+    raw.sort((a,b)=>a.week-b.week);
+    return raw;   // joined with google + meta in buildMerRows()
+  }
   const nf=c.fields.length, nb=c.bucketKeys.length, noteBase=2+nb*nf;
   const rows=[];
   const seenWeeks=new Set();
@@ -335,6 +380,26 @@ function loadData(text,c){
   return rows;
 }
 
+// ---- Total MER: join the revenue tab with BOTH ad tabs on Week. Spend is never stored twice.
+// A week missing from either ad tab is dropped (never shown as $0 spend beside real revenue).
+// Revenue per market is the sheet cell as-is: a market whose store is not connected stays null
+// (never 0), and ALL Revenue is the sheet's own ALL cell, not a re-sum of the market cells.
+function buildMerRows(merRaw,googleRows,metaRows){
+  const G=new Map((googleRows||[]).map(r=>[r.week,r])), M=new Map((metaRows||[]).map(r=>[r.week,r]));
+  const rows=[], dropped=[];
+  for(const r of merRaw){
+    const g=G.get(r.week), m=M.get(r.week);
+    if(!g||!m){ dropped.push(r.week); continue; }
+    const spend=b=>n0(g[b]&&g[b].spend)+n0(m[b]&&m[b].spend);
+    const row={ week:r.week, label:r.label, endISO:r.endISO, fx:r.fx, note:'', bullets:'', comments:{usa:'',can:'',aus:''} };
+    row.all={ spend:spend('all'), revenue:r.rev.all, purchases:r.orders };
+    for(const b of ['usa','can','aus']) row[b]={ spend:spend(b), revenue:r.rev[b], purchases:null };
+    rows.push(row);
+  }
+  if(dropped.length) console.warn(`Total MER: ${dropped.length} week(s) dropped for missing ad-tab rows: ${dropped.join(', ')}`);
+  return rows;
+}
+
 // ---- window stats: ratios are sum/sum over the window, never averaged ratios
 const sumN=a=>a.reduce((s,v)=>s+(v||0),0);
 function windowStats(rows,bucket){
@@ -348,6 +413,7 @@ function windowStats(rows,bucket){
 function niceMax(v){ if(!(v>0)) return 1; const p=Math.pow(10,Math.floor(Math.log10(v))); const n=v/p; const m=[1,1.2,1.5,2,2.5,3,4,5,6,8,10].find(s=>n<=s); return m*p; }
 function makePerfChart(canvas, rows, bucket, c){
   c=c||ch(); const T=c.targetRoas;
+  const RL=c.ratioLabel||'ROAS';
   const withYear=rows.length>52;                       // "All time" spans years; label them
   const labels=rows.map(r=>shortEnd(r.label,withYear));
   const spend=rows.map(r=>r[bucket].spend);
@@ -360,7 +426,7 @@ function makePerfChart(canvas, rows, bucket, c){
   const datasets=[
       { type:'bar', label:'Spend', data:spend, backgroundColor:'rgba(42,174,224,0.45)', borderRadius:4, yAxisID:'ySpend', order:3 },
       { type:'line', label:'Revenue', data:rev, borderColor:'#E5E9F0', backgroundColor:'#E5E9F0', borderWidth:2.5, pointRadius:3, pointHoverRadius:5, tension:.25, spanGaps:false, yAxisID:'yRev', order:1 },
-      { type:'line', label:'ROAS', data:roas, borderColor:'#C98500', backgroundColor:'#C98500', borderWidth:2, borderDash:[6,4], pointRadius:2.5, pointHoverRadius:5, tension:.25, spanGaps:false, yAxisID:'yRoas', order:2 },
+      { type:'line', label:RL, data:roas, borderColor:'#C98500', backgroundColor:'#C98500', borderWidth:2, borderDash:[6,4], pointRadius:2.5, pointHoverRadius:5, tension:.25, spanGaps:false, yAxisID:'yRoas', order:2 },
   ];
   if(T) datasets.push({ type:'line', label:'__target', data:labels.map(()=>T), borderColor:'rgba(201,133,0,0.45)', borderWidth:1, borderDash:[3,5], pointRadius:0, pointHitRadius:0, yAxisID:'yRoas', order:4 });
   const chart=new Chart(canvas,{
@@ -374,13 +440,13 @@ function makePerfChart(canvas, rows, bucket, c){
           backgroundColor:'#050816', borderColor:'rgba(42,174,224,0.5)', borderWidth:1,
           titleFont:{family:'Space Grotesk'}, bodyFont:{family:'JetBrains Mono'}, padding:12,
           filter:i=>i.dataset.label!=='__target',
-          itemSort:(a,b)=>{ const o={Spend:0,Revenue:1,ROAS:2}; return (o[a.dataset.label]??9)-(o[b.dataset.label]??9); },
+          itemSort:(a,b)=>{ const o={Spend:0,Revenue:1}; o[RL]=2; return (o[a.dataset.label]??9)-(o[b.dataset.label]??9); },
           callbacks:{
             title:items=>{ const r=rows[items[0].dataIndex]; return r?'Week ending '+longEnd(r.label):''; },
             label:ctx=>{
               const v=ctx.parsed.y;
               if(v==null||!Number.isFinite(v)) return ctx.dataset.label+': no data';  // null guard FIRST
-              if(ctx.dataset.label==='ROAS') return 'ROAS '+v.toFixed(1)+'x';
+              if(ctx.dataset.label===RL) return RL+' '+v.toFixed(1)+'x';
               return ctx.dataset.label+' $'+Math.round(v).toLocaleString('en-US');
             },
           },
@@ -450,7 +516,16 @@ function render(){
                    :'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg>';
 
   let html='';
-  if(c.key==='meta'){
+  if(c.key==='mer'){
+    const fx=latest.fx||{};
+    html+=`<div class="tiles">
+    <div class="tile"><div class="k">Ad Spend</div><div class="v">${fmt$(W.spend)}</div><div class="s">this week ${fmt$(wk.spend)} ${deltaSpan(pctDelta(wk.spend,pv&&pv.spend),'none')}</div></div>
+    <div class="tile"><div class="k">Revenue</div><div class="v">${fmt$(W.rev)}</div><div class="s">this week ${fmt$(wk.revenue)} ${deltaSpan(pctDelta(wk.revenue,pv&&pv.revenue),'up')}</div></div>
+    <div class="tile hl"><div class="k">MER</div><div class="v">${fmtX(W.roas)}</div><div class="s">this week ${fmtX(wkRoas)} ${deltaSpan(pctDelta(wkRoas,(pv&&pv.spend>0&&pv.revenue!=null)?pv.revenue/pv.spend:null),'up')}</div></div>
+    <div class="tile"><div class="k">Orders</div><div class="v">${fmtI(W.pur)}</div><div class="s">this week ${fmtI(wk.purchases)} ${deltaSpan(pctDelta(wk.purchases,pv&&pv.purchases),'up')}</div></div>
+  </div>
+  <div class="sub" style="margin:-6px 0 14px">Rates this week: 1 USD = ${fx.usdcad==null?'-':fx.usdcad.toFixed(4)} CAD · 1 AUD = ${fx.audcad==null?'-':fx.audcad.toFixed(4)} CAD · Google Demand Gen and Meta multi-market spend are in the total only</div>`;
+  } else if(c.key==='meta'){
     // reach is a UNIQUE count, so it cannot be summed across weeks: the Reach tile
     // shows the latest week only and compares it to the week before
     const wkReach=wk.reach, wkClicks=wk.clicks, wkAtc=wk.atc;
@@ -482,7 +557,7 @@ function render(){
       <div class="legend">
         <span><span class="chip" style="background:rgba(42,174,224,.55)"></span>Spend</span>
         <span><span class="lchip" style="background:#E5E9F0"></span>Revenue</span>
-        <span><span class="lchip" style="border-top:2px dashed #C98500"></span>ROAS</span>
+        <span><span class="lchip" style="border-top:2px dashed #C98500"></span>${c.ratioLabel||'ROAS'}</span>
         ${c.targetRoas?`<span><span class="lchip" style="border-top:1px dashed rgba(201,133,0,.6)"></span>${c.targetRoas.toFixed(1)}x target</span>`:''}
       </div>
       <button class="expandbtn" data-expand="overview" aria-expanded="${expanded.overview}">${expanded.overview?'Collapse':'Expand'} ${chevron(expanded.overview)}</button>
@@ -523,13 +598,13 @@ function render(){
       <div class="mstats${c.key==='meta'?' meta':''}">
         ${statCell('Spend',fmt$(m.spend),deltaSpan(pctDelta(m.spend,mp&&mp.spend),'none'))}
         ${statCell('Revenue',fmt$(m.revenue),deltaSpan(pctDelta(m.revenue,mp&&mp.revenue),'up'))}
-        ${statCell('Purchases',fmtI(m.purchases),deltaSpan(pctDelta(m.purchases,mp&&mp.purchases),'up'))}
-        ${statCell('Cost / Purchase',mCpa==null?'-':'$'+Math.round(mCpa),deltaSpan(pctDelta(mCpa,mp&&mp.purchases>0?mp.spend/mp.purchases:null),'down'))}
+        ${c.key==='mer'?statCell('MER',fmtX(mRoas),deltaSpan(pctDelta(mRoas,mpRoas),'up')):statCell('Purchases',fmtI(m.purchases),deltaSpan(pctDelta(m.purchases,mp&&mp.purchases),'up'))}
+        ${c.key==='mer'?'':statCell('Cost / Purchase',mCpa==null?'-':'$'+Math.round(mCpa),deltaSpan(pctDelta(mCpa,mp&&mp.purchases>0?mp.spend/mp.purchases:null),'down'))}
         ${c.key==='meta'?statCell('Link Clicks',fmtI(m.clicks),deltaSpan(pctDelta(m.clicks,mp&&mp.clicks),'up')):''}
         ${c.key==='meta'?statCell('Adds to Cart',fmtI(m.atc),deltaSpan(pctDelta(m.atc,mp&&mp.atc),'up')):''}
-        ${isX?statCell('ROAS '+rows.length+'-wk',fmtX(mW.roas),'selected period'):''}
+        ${isX?statCell((c.ratioLabel||'ROAS')+' '+rows.length+'-wk',fmtX(mW.roas),'selected period'):''}
         ${isX&&c.key==='meta'?statCell('Reach',fmtI(m.reach),'this week'):''}
-        ${isX&&c.key!=='meta'?statCell('New Customers',fmtP(mNc),'this week'):''}
+        ${isX&&c.key==='google'?statCell('New Customers',fmtP(mNc),'this week'):''}
       </div>
       ${sparkSVG(rows.map(r=>r[B.key].revenue))}
       <div class="chartbox"><canvas id="chart-${B.key}" role="img" aria-label="${B.name} weekly revenue, spend and ROAS chart"></canvas></div>
@@ -578,9 +653,10 @@ function wireControls(){
   };
   document.getElementById('d-from').addEventListener('change',onDate);
   document.getElementById('d-to').addEventListener('change',onDate);
-  for(const k of ['google','meta']){
+  for(const k of Object.keys(CHANNELS)){
     const b=document.getElementById('ch-'+k);
-    if(b) b.addEventListener('click',()=>{ switchChannel(k); });
+    if(!b) continue;   // a channel with no pill in the markup is simply not wired
+    b.addEventListener('click',()=>{ switchChannel(k); });
   }
 }
 
@@ -589,9 +665,9 @@ function applyChrome(){
   const c=ch();
   document.getElementById('subline').textContent=c.subline;
   document.getElementById('footnote').textContent=c.footnote;
-  for(const k of ['google','meta']){ const b=document.getElementById('ch-'+k); if(b) b.setAttribute('aria-pressed',String(k===CHANNEL)); }
+  for(const k of Object.keys(CHANNELS)){ const b=document.getElementById('ch-'+k); if(b) b.setAttribute('aria-pressed',String(k===CHANNEL)); }
   if(FEEDERR[CHANNEL]) showBanner(FEEDERR[CHANNEL]); else hideBanner();
-  try{ if(typeof history!=='undefined'&&typeof location!=='undefined') history.replaceState(null,'',CHANNEL==='meta'?'#meta':location.pathname+location.search); }catch(e){}
+  try{ if(typeof history!=='undefined'&&typeof location!=='undefined') history.replaceState(null,'',CHANNEL==='google'?location.pathname+location.search:'#'+CHANNEL); }catch(e){}
 }
 function fetchChannel(key){
   const c=CHANNELS[key];
@@ -623,21 +699,37 @@ function switchChannel(key){
   charts.forEach(x=>x.destroy()); charts=[];   // the old channel's charts are about to be detached
   document.getElementById('content').className='loading';
   document.getElementById('content').textContent='Loading live data…';
+  if(key==='mer'){
+    // Total MER needs BOTH ad tabs for spend; fetch Meta first if it has not been opened yet
+    const needMeta=(STORE.meta===null&&!FEEDERR.meta)?fetchChannel('meta').then(r=>{ STORE.meta=r; }):Promise.resolve();
+    return needMeta.then(()=>fetchChannel('mer')).then(raw=>{
+      if(!raw){ STORE.mer=null; if(CHANNEL===key) showChannel(); return; }
+      if(!STORE.google||!STORE.meta){
+        FEEDERR.mer='The Total MER view needs both the Google Ads and Meta Ads feeds, and one of them is not available right now. Please refresh to try again.';
+        STORE.mer=null; if(CHANNEL===key) showChannel(); return;
+      }
+      STORE.mer=buildMerRows(raw,STORE.google,STORE.meta);
+      if(CHANNEL===key) showChannel();
+    });
+  }
   return fetchChannel(key).then(rows=>{ STORE[key]=rows; if(CHANNEL===key) showChannel(); });
 }
 
 // test hook for tools/render-sim.cjs (harmless in production)
-window.__apollo={ parseCSV, loadData, windowStats, makePerfChart, sparkSVG, render, setWindow, switchChannel, CHANNELS,
+window.__apollo={ parseCSV, loadData, buildMerRows, windowStats, makePerfChart, sparkSVG, render, setWindow, switchChannel, CHANNELS,
   get data(){return DATA;}, set data(v){DATA=v;},
   get state(){return state;}, set state(v){state=v;},
   get expanded(){return expanded;},
   get charts(){return charts;},
   get channel(){return CHANNEL;} };
 
-// ---- boot: Google first (always), Meta on demand; #meta deep link opens Meta after Google loads
+// ---- boot: Google first (always), Meta / Total MER on demand; a #meta or #mer deep link opens that view after Google loads
 (function boot(){
-  const wantMeta=CHANNELS.meta.enabled && typeof location!=='undefined' && /^#meta$/i.test(location.hash||'');
+  const deep=(typeof location!=='undefined'&&(location.hash||'').replace('#','').toLowerCase())||'';
+  const wantChannel=(deep==='meta'||deep==='mer')&&CHANNELS[deep].enabled?deep:null;   // a disabled channel's deep link is ignored
   if(!CHANNELS.meta.enabled){ const cr=document.getElementById('channelrow'); if(cr) cr.style.display='none'; }
+  // a disabled non-default channel keeps its pill out of the row (same pattern as the channelrow hide above)
+  for(const k of Object.keys(CHANNELS)){ if(k==='google'||CHANNELS[k].enabled) continue; const b=document.getElementById('ch-'+k); if(b) b.style.display='none'; }
   fetchChannel('google').then(rows=>{
     STORE.google=rows;
     wireControls();
@@ -648,7 +740,7 @@ window.__apollo={ parseCSV, loadData, windowStats, makePerfChart, sparkSVG, rend
     // the channel row is NOT gated on google: a broken google feed must still let meta be opened
     if(CHANNELS.meta.enabled) document.getElementById('channelrow').style.visibility='visible';
     showChannel();
-    if(wantMeta) switchChannel('meta');
+    if(wantChannel) switchChannel(wantChannel);
   });
 })();
 </script>
