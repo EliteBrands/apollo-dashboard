@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- apollo-dashboard v3.0.0 -->
+<!-- apollo-dashboard v3.1.0 -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -231,7 +231,7 @@ const CHANNELS = {
     chartTitle: 'Revenue, Spend and ROAS · all markets',
   },
   mer: {
-    key:'mer', label:'Total MER', enabled:false, derived:true,   // derived: rows are built from this tab + google + meta · enabled: flip to true when the AU store is connected and the Total MER tab is backfilled
+    key:'mer', label:'Total MER', enabled:true, derived:true,   // derived: rows are built from this tab + google + meta · enabled: flip to true when the AU store is connected and the Total MER tab is backfilled
     csvUrl: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Total%20MER`,
     headers: [
       'Week','Date Range',
