@@ -244,6 +244,30 @@ async function main() {
     check('angle brackets in a note render literally, never as markup', content.includes('&lt;b&gt;under&lt;/b&gt;') && content.includes('&amp;') && !content.includes('<b>under</b>') && !content.includes('&amp;amp;'));
     check('3 win bullets render', (content.match(/class="win"/g) || []).length === 3);
     check('all 4 market comments render', ['USA comment.', 'CAN comment.', 'AUS comment.', 'DG comment.'].every(s => content.includes(s)));
+    const mktAt = content.indexOf('<div class="markets">');
+    check('market comments sit in the note card "By market" block, before the market cards', content.includes('By market') && (content.match(/class="bm"/g) || []).length === 4 && mktAt > 0 && ['USA comment.', 'CAN comment.', 'AUS comment.', 'DG comment.'].every(s => content.indexOf(s) < mktAt));
+    check('market comments are not repeated inside the market cards', ['USA comment.', 'CAN comment.', 'AUS comment.', 'DG comment.'].every(s => content.split(s).length === 2));
+    check('By market names each market in bucket order', /United States[\s\S]*USA comment\.[\s\S]*Canada[\s\S]*CAN comment\.[\s\S]*Australia[\s\S]*AUS comment\.[\s\S]*Demand Gen[\s\S]*DG comment\./.test(content.slice(0, mktAt)));
+    // a window that ends BEFORE the newest week must hide the newest week's market comments too
+    const TA = t.sandbox.window.__apollo;
+    const tEnds = (TA && TA.data || []).map(r => r.endISO);
+    if (TA && tEnds.length >= 2) {
+      TA.state = { from: tEnds[0], to: tEnds[tEnds.length - 2] };
+      TA.render();
+      const old = t.els.content.innerHTML || '';
+      check('market comments hidden when the window does not end at the newest week', !old.includes('By market') && !old.includes('USA comment.') && !old.includes('DG comment.'));
+    } else check('market comments hidden when the window does not end at the newest week', false);
+  }
+  {
+    // market comments only, no lead note and no bullets -> card must still render them
+    // (blank every note column first: the live newest row may already carry a published pack)
+    const recs = indieRows(csv);
+    for (let k = 22; k <= 27; k++) recs[recs.length - 1][k] = '';
+    recs[recs.length - 1][25] = 'Only CAN comment.';
+    const t = bootPage(recs.map(r => r.map(x => '"' + String(x).replace(/"/g, '""') + '"').join(',')).join('\n'));
+    await flush();
+    const h = t.els.content.innerHTML || '';
+    check('a market comment alone still renders the note card', h.includes('notecard') && h.includes('Only CAN comment.') && (h.match(/class="bm"/g) || []).length === 1);
   }
   {
     // bullets present, note empty -> card must still render
@@ -270,7 +294,7 @@ async function main() {
     await flush();
     const content = t.els.content ? t.els.content.innerHTML : '';
     const newest = indieRows(csv).filter(r => Number.isFinite(parseInt(r[0], 10))).pop() || [];
-    const hasNote = !!((newest[22] || '').trim() || (newest[23] || '').trim());
+    const hasNote = [22, 23, 24, 25, 26, 27].some(k => (newest[k] || '').trim());   // market comments alone also render the card
     if (hasNote) check('note card renders when the sheet carries a note', content.includes('This week from your strategist'));
     else check('no note card when the note column is empty', !content.includes('This week from your strategist'));
   }
@@ -368,6 +392,8 @@ async function main() {
     check('meta byline names Sam', content.includes('Sam · Elite Brands'));
     check('2 meta win bullets render', (content.match(/class="win"/g) || []).length === 2);
     check('all 4 meta market comments render', ['USA meta comment.', 'CAN meta comment.', 'AUS meta comment.', 'MULTI meta comment.'].every(s => content.includes(s)));
+    const mAt = content.indexOf('<div class="markets">');
+    check('meta market comments sit in the note card, once each', mAt > 0 && ['USA meta comment.', 'CAN meta comment.', 'AUS meta comment.', 'MULTI meta comment.'].every(s => content.indexOf(s) < mAt && content.split(s).length === 2) && content.slice(0, mAt).includes('Multi-market'));
   }
 
   // ---------------- Total MER channel (v3)

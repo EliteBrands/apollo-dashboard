@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- apollo-dashboard v3.1.0 -->
+<!-- apollo-dashboard v3.2.0 -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -83,6 +83,11 @@
   .wins{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 22px;margin-top:14px}
   .win{display:flex;gap:10px;align-items:flex-start;font-size:13.5px;line-height:1.55}
   .win svg{flex:none;margin-top:2px}
+  .bymkt{margin-top:18px;padding-top:14px;border-top:1px solid rgba(42,174,224,.20)}
+  .bymkt .bmh{font-family:var(--head);font-weight:600;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+  .bmgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 22px;margin-top:10px}
+  .bm{font-size:13.5px;line-height:1.6;overflow-wrap:anywhere}
+  .bm b{display:block;color:var(--cyan);font-family:var(--head);font-weight:600;font-size:13px;margin-bottom:2px}
 
   .markets{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
   .mkt{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:18px 20px}
@@ -92,8 +97,6 @@
   .tag{font-family:var(--mono);font-size:10px;color:var(--muted);border:1px solid var(--border);border-radius:999px;padding:2px 8px}
   .mroas{margin-left:auto;font-family:var(--mono);font-weight:600;font-size:22px;color:var(--cyan)}
   .mroas small{font-size:11px;font-weight:500}
-  .comment{font-size:12.5px;line-height:1.6;margin-top:10px;padding:10px 12px;background:rgba(42,174,224,.07);border:1px solid rgba(42,174,224,.20);border-radius:10px}
-  .comment b{color:var(--cyan);font-weight:600}
   .mstats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px 12px;margin-top:12px}
   .mkt.expanded .mstats{grid-template-columns:repeat(6,minmax(0,1fr))}
   /* meta cards carry 6 stats collapsed and 8 expanded - 3 and 4 columns divide both evenly, so no orphan row */
@@ -114,7 +117,7 @@
   .loading{padding:40px;text-align:center;color:var(--muted)}
   footer{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px;border-top:1px solid var(--border);padding-top:16px;flex-wrap:wrap}
   footer b{font-family:var(--head);font-weight:600;color:var(--text)}
-  @media (max-width:980px){ .tiles{grid-template-columns:repeat(3,minmax(0,1fr))} .tiles.meta{grid-template-columns:repeat(3,minmax(0,1fr))} .markets{grid-template-columns:1fr} .wins{grid-template-columns:1fr} .wrap{padding:20px} }
+  @media (max-width:980px){ .tiles{grid-template-columns:repeat(3,minmax(0,1fr))} .tiles.meta{grid-template-columns:repeat(3,minmax(0,1fr))} .markets{grid-template-columns:minmax(0,1fr)} .wins{grid-template-columns:1fr} .bmgrid{grid-template-columns:minmax(0,1fr)} .wrap{padding:20px} }
   @media (max-width:600px){
     header{flex-wrap:wrap}
     .headright{margin-left:0;text-align:left;flex:1 1 100%}
@@ -201,7 +204,7 @@ const CHANNELS = {
     targetRoas: TARGET_ROAS,
     subline: 'Prepared by Elite Brands · Google Ads · All figures CAD · Purchase conversions, counted by conversion time',
     footnote: '· Performance Marketing · Data: Google Ads API, purchase conversions counted by conversion time · Questions: reply to your weekly email',
-    noteTitle: 'This week from your strategist', byline: 'Glen Wilson · Elite Brands', commentLabel: 'Strategist:',
+    noteTitle: 'This week from your strategist', byline: 'Glen Wilson · Elite Brands',
     chartTitle: 'Revenue, Spend and ROAS · all markets',
   },
   meta: {
@@ -227,7 +230,7 @@ const CHANNELS = {
     targetRoas: null,
     subline: 'Prepared by Elite Brands · Meta Ads · All figures CAD · Meta-reported purchases, 7-day click / 1-day view',
     footnote: '· Performance Marketing · Data: Meta Marketing API, Meta-reported purchases (7-day click / 1-day view). Meta figures do not add to Google figures. Reach is a weekly unique count; market reach is summed across campaigns · Questions: reply to your weekly email',
-    noteTitle: 'This week from your Meta team', byline: 'Sam · Elite Brands', commentLabel: 'Meta team:',
+    noteTitle: 'This week from your Meta team', byline: 'Sam · Elite Brands',
     chartTitle: 'Revenue, Spend and ROAS · all markets',
   },
   mer: {
@@ -250,7 +253,7 @@ const CHANNELS = {
     targetRoas: null, ratioLabel:'MER',
     subline: 'Prepared by Elite Brands · Total MER · All figures CAD · Revenue: Shopify orders, all three stores, converted at Bank of Canada weekly rates',
     footnote: '· Performance Marketing · Ad Spend = Google Ads + Meta Ads. MER = store revenue divided by ad spend. Revenue = Shopify orders after discounts, before shipping and tax, in CAD at Bank of Canada weekly rates. Demand Gen and multi-market spend count in the total only. A country whose store is not yet connected shows no revenue but its ad spend still counts, so Total MER reads low until it connects · Questions: reply to your weekly email',
-    noteTitle: '', byline: '', commentLabel: '',
+    noteTitle: '', byline: '',
     chartTitle: 'Revenue, Ad Spend and MER · all markets · both channels',
   },
 };
@@ -524,6 +527,8 @@ function render(){
   const commentaryOn=latest.week===latestAll.week;
   const note=commentaryOn?esc(latestAll.note):'';
   const bullets=(commentaryOn&&latestAll.bullets)?latestAll.bullets.split(' | ').filter(Boolean).map(esc):[];
+  // per-market comments render inside the note card ("By market"), not in each market card
+  const mktNotes=commentaryOn?c.buckets.map(B=>({name:B.name,text:esc(latestAll.comments[B.key])})).filter(m=>m.text):[];
   const check='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3fd68f" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>';
   const chevron=o=>o?'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"></path></svg>'
                    :'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg>';
@@ -578,7 +583,7 @@ function render(){
     <div class="chartbox"><canvas id="chart-overview" role="img" aria-label="Weekly revenue, spend and ${c.ratioLabel||'ROAS'} chart, all markets"></canvas></div>
   </div>`;
 
-  if(note||bullets.length){
+  if(note||bullets.length||mktNotes.length){
     html+=`<div class="notecard">
       <div class="nh">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2AAEE0" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
@@ -587,6 +592,7 @@ function render(){
       </div>
       ${note?`<div class="notebody">${note}</div>`:''}
       ${bullets.length?`<div class="wins">${bullets.map(b=>`<div class="win">${check}<div>${b}</div></div>`).join('')}</div>`:''}
+      ${mktNotes.length?`<div class="bymkt"><div class="bmh">By market</div><div class="bmgrid">${mktNotes.map(m=>`<div class="bm"><b>${m.name}</b>${m.text}</div>`).join('')}</div></div>`:''}
     </div>`;
   }
 
@@ -599,7 +605,6 @@ function render(){
     const mCpa=m.purchases>0?m.spend/m.purchases:null;
     const dRoas=(mRoas!=null&&mpRoas!=null)?mRoas-mpRoas:null;
     const isX=expanded[B.key];
-    const comment=commentaryOn?esc(latestAll.comments[B.key]):'';
     const mNc=(m.purchases>0&&m.newcust!=null)?m.newcust/m.purchases:null;
     html+=`<div class="mkt ${isX?'expanded':''}" id="card-${B.key}">
       <div class="mh">
@@ -607,7 +612,6 @@ function render(){
         <span class="mroas">${fmtX(mRoas)} <small class="${dRoas==null?'':(dRoas>=0?'up':'down')}">${dRoas==null?'':(dRoas>=0?'+':'')+dRoas.toFixed(1)+' WoW'}</small></span>
         <button class="expandbtn" data-expand="${B.key}" aria-expanded="${isX}">${isX?'Collapse':'Expand'} ${chevron(isX)}</button>
       </div>
-      ${comment?`<div class="comment"><b>${c.commentLabel}</b> ${comment}</div>`:''}
       <div class="mstats${c.key==='meta'?' meta':(c.key==='mer'?' mer':'')}">
         ${statCell('Spend',fmt$(m.spend),deltaSpan(pctDelta(m.spend,mp&&mp.spend),'none'))}
         ${statCell('Revenue',fmt$(m.revenue),deltaSpan(pctDelta(m.revenue,mp&&mp.revenue),'up'))}
