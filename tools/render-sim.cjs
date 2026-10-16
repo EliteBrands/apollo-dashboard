@@ -444,16 +444,89 @@ async function main() {
     A.setWindow(8); A.render();
     const rlive = createdCharts.filter(c => !c.destroyed);
     check('mer: exactly 1 chart when nothing expanded', rlive.length === 1, `got ${rlive.length}`);
-    check('mer overview has 3 datasets, ratio dataset labelled MER, no target', rlive[0] && rlive[0].config.data.datasets.length === 3 && rlive[0].config.data.datasets.some(d => d.label === 'MER'));
+    // v3.3: the Net band ships behind CHANNELS.mer.netEnabled. With it OFF the view is v3.2 plus the relabel.
+    const netShipped = A.CHANNELS.mer.netEnabled === true;
+    check('mer overview (net off) has 3 datasets, ratio dataset labelled Tracked MER, revenue dataset labelled Tracked Revenue, no target', netShipped || (rlive[0] && rlive[0].config.data.datasets.length === 3 && rlive[0].config.data.datasets.some(d => d.label === 'Tracked MER') && rlive[0].config.data.datasets.some(d => d.label === 'Tracked Revenue')));
     const rhtml = els.content ? els.content.innerHTML : '';
-    check('mer tiles: Ad Spend, Revenue, MER, Orders present', ['>Ad Spend<', '>Revenue<', '>MER<', '>Orders<'].every(s => rhtml.includes(s)));
+    check('mer tiles: Ad Spend, Tracked Revenue, Tracked MER, Orders present', ['>Ad Spend<', '>Tracked Revenue<', '>Tracked MER<', '>Orders<'].every(s => rhtml.includes(s)));
+    check('mer tiles: no bare Revenue / MER label (relabel complete)', !rhtml.includes('>Revenue<') && !rhtml.includes('>MER<'));
+    check('mer (net off): no Net band, no net tiles', netShipped || (!rhtml.includes('Shopify Net Sales') && !rhtml.includes('tile net')));
+    check('mer: Tracked explainer card present, hidden at rest, with its first line', rhtml.includes('id="explain-tracked" hidden') && rhtml.includes('It is the order value after discounts, before shipping and tax.'));
+    check('mer: explainer button wired by data-explain and exposed as toggleExplainer', rhtml.includes('data-explain="tracked"') && typeof A.toggleExplainer === 'function');
     check('mer tiles: no ROAS, no Cost / Purchase, no New Customers, no Purchases', !['>ROAS<', 'Cost / Purchase', 'New Customers', '>Purchases<'].some(s => rhtml.includes(s)));
     check('mer rate line shows both rates', /1 USD = \d\.\d{3} CAD/.test(rhtml) && /1 AUD = \d\.\d{3} CAD/.test(rhtml));
     check('mer window revenue for a not-connected market is null, never 0', (() => { const w = A.windowStats(last4, 'aus'); return lastRow.aus.revenue === null ? (w.rev === null && w.roas === null) : typeof w.rev === 'number'; })());
     check('mer market cards: USA, CAN, AUS only', ['card-usa', 'card-can', 'card-aus'].every(s => rhtml.includes(`id="${s}"`)) && !rhtml.includes('card-dg') && !rhtml.includes('card-multi'));
     check('mer view has no note card', !rhtml.includes('notecard'));
+
+    // ---- v3.3 Net Sales ON (flip the switch in the sandbox, as the launch switch above)
+    A.CHANNELS.mer.netEnabled = true; A.render(); await flush();
+    const nhtml = els.content ? els.content.innerHTML : '';
+    const nlive = createdCharts.filter(c => !c.destroyed);
+    const newest = last4[last4.length - 1];
+    const iNet = last4.reduce((s, r) => s + parseFloat(R.get(r.week)[18] || 0), 0);
+    const iRet = last4.reduce((s, r) => s + parseFloat(R.get(r.week)[22] || 0), 0);
+    const NW = A.windowStats(last4, 'all');
+    check('net: showNet true on the live feed (net cells present)', A.showNet(rrows) === true);
+    check('net: two band rows, Tracked Revenue then Shopify Net Sales', (nhtml.match(/class="band/g) || []).length === 2 && nhtml.indexOf('Tracked Revenue') < nhtml.indexOf('Shopify Net Sales'));
+    check('net: three net tiles Net Sales, Net MER, Returns', (nhtml.match(/class="tile net/g) || []).length === 3 && ['>Net Sales<', '>Net MER<', '>Returns<'].every(s => nhtml.includes(s)));
+    check('net: window Net Sales = sheet ALL Net Sales (column 19, independent sum)', Math.abs(NW.net - iNet) < 0.01, `${NW.net} vs ${iNet}`);
+    check('net: window Returns = sheet ALL Returns (column 23, independent sum)', Math.abs(NW.ret - iRet) < 0.01, `${NW.ret} vs ${iRet}`);
+    check('net: Net MER is sum(net)/sum(spend)', Math.abs(NW.netRoas - iNet / iSpend) < 1e-9);
+    check('net: netOf reads the stored cell, never revenue minus returns', A.netOf(newest.all) === newest.all.net && Math.abs(newest.all.net - (newest.all.revenue - newest.all.returns)) > 0.01);
+    check('net: overview has 4 datasets, Net Sales dashed lavender on yRev', nlive.length === 1 && nlive[0].config.data.datasets.length === 4 && nlive[0].config.data.datasets.some(d => d.label === 'Net Sales' && d.yAxisID === 'yRev' && Array.isArray(d.borderDash) && d.borderColor === '#B48CF2'));
+    check('net: legend names Tracked Revenue, Net Sales and Tracked MER', ['>Tracked Revenue</span>', '>Net Sales</span>', '>Tracked MER</span>'].every(s => nhtml.includes(s)));
+    const abody = nlive[0] && nlive[0].config.options.plugins.tooltip.callbacks.afterBody;
+    const abOut = abody ? abody([{ dataIndex: nlive[0].config.data.labels.length - 1 }]) : null;
+    check('net: tooltip afterBody yields one Net MER line', Array.isArray(abOut) && abOut.length === 1 && /^Net MER \d+\.\dx$/.test(abOut[0]), JSON.stringify(abOut));
+    check('net: Net explainer card present, hidden at rest, with its first line', nhtml.includes('id="explain-net" hidden') && nhtml.includes('It is the Net sales figure from your Shopify Analytics'));
+    check('net: USA market card carries a Net MER stat (ms net) and a net footer', nhtml.includes('class="ms net"') && (nhtml.match(/>Net MER</g) || []).length >= 2 && / · net \$/.test(nhtml));
+    check('net: Returns tile subline reads "% of net sales"', /\d+% of net sales/.test(nhtml));
+    A.CHANNELS.mer.netEnabled = netShipped;   // back to the shipped setting for the rest of the run
+
     await A.switchChannel('google'); await flush();
     check('switching back restores google rows untouched', A.channel === 'google' && A.data === gRows);
+    const g2 = els.content ? els.content.innerHTML : '';
+    check('google view: no Tracked label, no net class, no net key on rows, revenue dataset still "Revenue"', !g2.includes('Tracked') && !g2.includes('tile net') && !g2.includes('ms net') && !('net' in (A.data[0].all)) && createdCharts.filter(c => !c.destroyed)[0].config.data.datasets.some(d => d.label === 'Revenue'));
+  }
+  {
+    // ---- v3.3 fixtures: the Net band must be honest about missing cells
+    const merRecs = indieRows(merCsv);
+    const toCsv = recs => recs.map(r => r.map(c => `"${String(c == null ? '' : c).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const dataIdx = merRecs.map((r, i) => i).filter(i => i > 0 && Number.isFinite(parseInt(merRecs[i][0], 10)));
+    const newestIdx = dataIdx.reduce((a, b) => (parseInt(merRecs[a][0], 10) >= parseInt(merRecs[b][0], 10) ? a : b));
+    const blankNet = (recs, idxs) => recs.map((r, i) => (idxs.includes(i) ? r.map((c, j) => (j >= 12 && j <= 22 ? '' : c)) : r));
+    const bootMer = async (csvText) => {
+      const t = bootPage(csv, metaCsv, csvText); await flush();
+      const TA = t.sandbox.window.__apollo; TA.CHANNELS.mer.enabled = true; TA.CHANNELS.mer.netEnabled = true;
+      await TA.switchChannel('mer'); await flush();
+      return { t, TA, html: t.els.content ? t.els.content.innerHTML : '' };
+    };
+    {
+      // one in-window row (the newest) has revenue but blank net cells: window net is null, tile shows "-", band still shows
+      const { TA, html } = await bootMer(toCsv(blankNet(merRecs, [newestIdx])));
+      const w = TA.windowStats(TA.data.slice(-4), 'all');
+      check('fixture mixed rows: window net and Net MER are null, never a partial sum', w.net === null && w.netRoas === null && w.ret === null);
+      check('fixture mixed rows: Net Sales tile shows "-" while the band still renders (other rows carry net)', html.includes('<div class="k">Net Sales</div><div class="v">-</div>') && html.includes('Shopify Net Sales'));
+    }
+    {
+      // every net cell blank (sheet written before v3.3 for all weeks): the band hides itself, chart back to 3 datasets
+      const { TA, html, t } = await bootMer(toCsv(blankNet(merRecs, dataIdx)));
+      const live = t.createdCharts.filter(c => !c.destroyed);
+      check('fixture all blank: showNet false, no band, no net tiles, 3 datasets', TA.showNet(TA.data) === false && !html.includes('Shopify Net Sales') && !html.includes('tile net') && live[0] && live[0].config.data.datasets.length === 3);
+    }
+    {
+      // a negative Shopify net sales week (big returns in a quiet week) is printed as is, never clamped
+      const neg = merRecs.map((r, i) => (i === newestIdx ? r.map((c, j) => (j === 18 ? '-500' : c)) : r));
+      const { html } = await bootMer(toCsv(neg));
+      check('fixture negative net: tile prints the negative value', html.includes('this week $-500'), html.slice(html.indexOf('Net Sales'), html.indexOf('Net Sales') + 200));
+    }
+    {
+      // the pre-v3.3 12-column contract still parses and renders (band hidden, no banner)
+      const legacy = merRecs.map(r => r.slice(0, 12));
+      const { TA, html, t } = await bootMer(toCsv(legacy));
+      check('fixture legacy 12-col CSV: rows parse, band hidden, no banner', (TA.data || []).length >= 4 && !html.includes('tile net') && !(t.els.banner && t.els.banner.style.display === 'block'));
+    }
   }
   {
     // join rule: a Total MER week with no matching Meta row is dropped, never shown with partial spend
