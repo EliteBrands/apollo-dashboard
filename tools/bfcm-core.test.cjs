@@ -124,8 +124,12 @@ test('phases and saleMonths', () => {
 
 test('REVIEW FOCUS 1: Brisbane Saturday morning is still Friday in Toronto', () => {
   assert.equal(C.torontoDate(new Date('2026-11-27T21:30:00Z')), '2026-11-27');
+  // DST edge (clocks fall back 1 Nov 2026 at 06:00Z)
+  assert.equal(C.torontoDate(new Date('2026-11-01T04:30:00Z')), '2026-11-01');   // 00:30 EDT
+  assert.equal(C.torontoDate(new Date('2026-11-01T03:30:00Z')), '2026-10-31');   // 23:30 EDT
   const wrows = parse(flat('2026-11-20', '2026-11-27', [1, 1, 1], [1, 1, 1], [1, 1])).rows;
-  const r = C.presetRange('week', '2026-11-27', cfg, wrows);
+  const today = C.torontoDate(new Date('2026-11-27T21:30:00Z'));
+  const r = C.presetRange('week', today, cfg, wrows);   // chained: the page feeds presetRange torontoDate(now)
   assert.equal(r.from, '2026-11-23');
   assert.equal(r.to, '2026-11-27');   // clamped to rows present
 });
@@ -220,8 +224,9 @@ test('pacing: Google and Meta use their own through, Total the earlier; avg7 rea
 });
 
 test('REVIEW FOCUS 2: a 100% Google split gives Meta a $0 budget and no band', () => {
-  const p = C.pacing(rows, '2026-11', { total: 55000, pct: 100 }, '2026-12-06', '2026-11-10');
+  const p = C.pacing(rows, '2026-10', { total: 55000, pct: 100 }, '2026-12-06', '2026-10-16');
   assert.equal(p.meta.budget, 0);
+  assert.notEqual(p.meta.landsAt, null);   // real data, so only the zero-budget branch can null pct
   assert.equal(p.meta.pct, null);
   assert.equal(p.meta.band, 'none');
 });
