@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- apollo-dashboard v4.0.0 -->
+<!-- apollo-dashboard v4.0.1 -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -172,9 +172,11 @@
   footer .ver{margin-left:auto;font-family:var(--mono);font-size:11px;opacity:.7}
   .bf{display:flex;flex-direction:column;gap:18px;min-width:0}
   .bf-alerts{display:contents}   /* patchable wrapper: its banners sit in the .bf column as before, an empty one adds no gap */
+  .bf-ret,.bf-presets,.bf-nodays{display:contents}   /* patchable wrappers for a picked date range: the layout is as if they were not there */
   .bf-alert{border:1px solid var(--bad);background:rgba(255,107,107,.08);border-radius:12px;padding:12px 16px;font-size:13px}
   .bf-info{border:1px solid var(--border);border-radius:12px;padding:12px 16px;font-size:13px;color:var(--muted)}   /* neutral note: not started yet, sale ended */
-  .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}  .bf-stale{border:1px solid var(--sale-line);background:var(--sale-dim);border-radius:12px;padding:10px 16px;font-size:13px}
+  .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+  .bf-stale{border:1px solid var(--sale-line);background:var(--sale-dim);border-radius:12px;padding:10px 16px;font-size:13px}
   .bf-stale b{color:var(--sale);font-weight:600}
   .bf-stalenote{color:var(--sale)}
   .bf-phase{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);border:1px solid var(--border);border-radius:12px;overflow:hidden}   /* one column per phase (a short sale drops one) */
@@ -226,7 +228,7 @@
   .bf-unsaved{display:inline-block;font-size:11px;font-weight:600;color:var(--sale);border:1px solid var(--sale-line);border-radius:999px;padding:1px 9px;margin-right:6px}
   .bf-newer{font-size:12px;color:var(--sale)}
   .bf-save{font-family:var(--head);font-weight:600;font-size:12.5px;border-radius:999px;padding:7px 16px;border:1px solid var(--sale);background:var(--sale);color:var(--ink);cursor:pointer;align-self:flex-start}
-  .bf-save[disabled],.bf-save[aria-disabled="true"]{opacity:.45;cursor:not-allowed}   /* aria-disabled keeps the button focusable */
+  .bf-save[disabled],.bf-save[aria-disabled="true"]{opacity:.7;cursor:not-allowed}   /* aria-disabled keeps the button focusable; .7 keeps its text readable */
   .bf-status{font-size:12px;line-height:1.5;color:var(--text);overflow-wrap:anywhere}
   .bf-st-saved{color:var(--good)} .bf-st-rejected,.bf-st-unconfirmed{color:var(--bad)} .bf-st-checking,.bf-st-needname{color:var(--sale)}
   .bf-range{width:100%;accent-color:var(--sale)}
@@ -253,7 +255,7 @@
   .bf-ftile .v{font-size:20px}
   .bf-basis{color:var(--muted)}
   @media (max-width:980px){ .bf-tiles{grid-template-columns:repeat(2,minmax(0,1fr))} .bf-budget,.bf-fc{grid-template-columns:minmax(0,1fr)} }
-  @media (max-width:600px){ .bf-out{grid-template-columns:minmax(0,1fr)} .bf-wl{margin-left:0;flex-basis:100%} .bf-chartbox{height:380px} .bf-budget,.bf-fc{padding:16px} .bf-ph{padding:8px 6px;font-size:11px} .bf-ph b{font-size:11.5px} #bf-t-sale{grid-column:1/-1} .bf-pre,.bf-save{min-height:40px} }
+  @media (max-width:600px){ .bf-out{grid-template-columns:minmax(0,1fr)} .bf-wl{margin-left:0;flex-basis:100%} .bf-chartbox{height:380px} .bf-budget,.bf-fc{padding:16px} .bf-ph{padding:8px 6px;font-size:11px} .bf-ph b{font-size:11.5px} #bf-t-sale{grid-column:1/-1} .bf-pre,.bf-save{min-height:40px} .bf input{min-height:40px} .bf summary{padding:8px 0} }
 </style>
 </head>
 <body>
@@ -298,11 +300,11 @@
   <footer>
     <b>Elite Brands</b>
     <span id="footnote">· Performance Marketing · Data: Google Ads API, purchase conversions counted by conversion time · Questions: reply to your weekly email</span>
-    <span class="ver">v4.0.0</span>
+    <span class="ver">v4.0.1</span>
   </footer>
 </div>
 
-<!-- cache-buster: bump all three together on ANY bfcm-*.js change (one ?v= value for the three files) -->
+<!-- cache-buster: bump all three together on ANY bfcm-*.js change (one ?v= value for the three files); keep mount() and CHANNELS.bfcm backward-compatible within one push (an old cached index.html can run new JS for ~10 min) -->
 <script src="bfcm-core.js?v=4.0.1"></script><script src="bfcm-view.js?v=4.0.1"></script><script src="bfcm-save.js?v=4.0.1"></script>
 <script>
 const SHEET_ID = '1IqcF3hZNmtBlsffVi7y9jToIVGbHyWsDuT6os5wHAt0';   // config.json dashboard_sheet_id
@@ -1021,6 +1023,7 @@ function openBfcm(){
 }
 function closeBfcm(){
   if(typeof BFCM_VIEW!=='undefined') BFCM_VIEW.unmount();   // stops every BFCM timer
+  const lv=document.getElementById('bf-live'); if(lv) lv.textContent='';   // nothing from the BFCM view is left to be read out
   document.getElementById('controls').style.display='';
   const hm=document.getElementById('headmeta'); if(hm) hm.style.display='';
 }

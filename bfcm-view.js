@@ -5,8 +5,10 @@
    argument) so tools/render-sim.cjs can drive a fake clock. Every time shown is America/Toronto, labelled.
    Saving (spec 21, 22): the DOM side lives here, the network side (rid, POST, one retry, name storage) in
    bfcm-save.js (window.BFCM_SAVE). The typed name is set on its input by DOM property, never an attribute.
-   Keyboard focus survives every rebuild (focusSel / refocus); save states are announced by the page's one live
-   region #bf-live (index.html, outside the repainted content). */
+   Keyboard focus survives every rebuild (focusSel / refocus); save states, and each banner once when it appears or its
+   words change, are announced by the page's one live region #bf-live (index.html, outside the repainted content); the
+   banners themselves carry no role, because every repaint re-inserts them. A date picked in From / To patches the
+   window-dependent areas only, so the date inputs are never rebuilt under an open picker. */
 (function (root) {
   'use strict';
   const SOURCES = ['google', 'meta', 'store'];
@@ -17,6 +19,11 @@
   const STALE_REFETCH_MS = 300000;       // tab back to visible: refetch when the last fetch is older than 5 min
   const BACKOFF_CAP_MS = 3600000;        // repeated refresh errors: the wait doubles up to this (60 min)
   const HOLD_MS = 120000;                // after an ok save, an older gviz config cannot flip that key back for 2 min
+  const FINAL_AFTER_DAYS = 8;            // Meta adds sales to a day for up to 7 days: the figures are final from sale end + 8
+  // the budget months the config endpoint accepts. MUST equal the budget keys in EDITABLE_KEYS of
+  // clients/apollo-scooters/apps-script/bfcm-config.gs (tools/render-sim.cjs cross-checks the two). Any other sale month
+  // (a sale extended into January) is shown read-only, "Set in the sheet".
+  const PAGE_EDITABLE_BUDGET_MONTHS = ['2026-10', '2026-11', '2026-12'];
   const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const MONTH = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -58,8 +65,10 @@
     const shown = runs.slice(0, 3).map(r => drange(r[0], r[1]));
     return shown.join(', ') + (runs.length > 3 ? ' and ' + (runs.length - 3) + ' more' : '');
   }
-  // after the sale (Toronto today past sale end + 2 days) the data stops on purpose: no stale banners or marks
-  const saleOver = () => !!(S && S.cfg && torontoToday() > C.addDays(S.cfg.saleEnd, 2));
+  // from sale end + 8 (Toronto) the figures are final: no stale banners or marks and no edit controls. From sale end + 1
+  // to + 7 the sale has ended but the last days can still move (a softer note; the banners stay)
+  const saleOver = () => !!(S && S.cfg && torontoToday() >= C.addDays(S.cfg.saleEnd, FINAL_AFTER_DAYS));
+  const saleEnded = () => !!(S && S.cfg && torontoToday() > S.cfg.saleEnd);
   function staleNote(srcs) {
     if (!S.stale || saleOver()) return '';
     const st = srcs.filter(s => S.stale[s] && S.stale[s].stale).map(s => NAME[s]);
@@ -75,8 +84,10 @@
     if (o.through < to) return pre + 'to ' + dshort(o.through);
     return '';
   }
-  // every patched area keeps keyboard focus where it was (see focusSel)
+  // every patched area keeps keyboard focus where it was (see focusSel); put() is the bare write, for areas that cannot
+  // hold the focus at that moment
   function setHTML(id, html) { const n = document.getElementById(id); if (!n) return; const f = focusSel(); n.innerHTML = html; refocus(f); }
+  function put(id, html) { const n = document.getElementById(id); if (n) n.innerHTML = html; }
   function listen(target, ev, fn) { if (target && typeof target.addEventListener === 'function') { target.addEventListener(ev, fn); handlers.push([target, ev, fn]); } }
   const isVisible = () => typeof document.visibilityState !== 'string' || document.visibilityState === 'visible';
   function focusedInView() { const a = document.activeElement; return (a && el && typeof el.contains === 'function' && el.contains(a)) ? a : null; }
@@ -91,11 +102,8 @@
   }
   // the 60 s timer's OWN repaint (today marker, staleness) also waits while a slider or a date field has focus, so a drag
   // or a date pick is never rebuilt under the person; its alerts + freshness area still updates, the rest on focusout
-  function tickHeld() {
-    const a = focusedInView();
-    const type = a && a.tagName === 'INPUT' ? String(a.type || '').toLowerCase() : '';
-    return type === 'range' || type === 'date';
-  }
+  function focusedType() { const a = focusedInView(); return a && a.tagName === 'INPUT' ? String(a.type || '').toLowerCase() : ''; }
+  function tickHeld() { const type = focusedType(); return type === 'range' || type === 'date'; }
   // Keyboard focus survives a rebuild: before innerHTML is replaced the focused control is named by its id or its
   // data-bf (+ data-v / data-k / data-key), and the same control is focused again afterwards. Those values are fixed
   // words, months and keys the view itself writes (never sheet text); anything else is not restored.
@@ -134,6 +142,7 @@
       lastFetchAt: 0, lastOkAt: 0, pendingPaint: false, pendingData: false, sig: '', open: null, dataVersion: 0, paintedVersion: 0,
       saving: {}, who: SAVER() ? SAVER().loadName() : '', pendingRid: {}, holds: {}, focusSave: null,
       fetchSeq: 0, appliedSeq: 0, errStreak: 0, pollSkip: 0,
+      banners: {}, alertsShown: null, scopeMsg: { budget: '', targets: '' }, paintAfterClick: false, freshSlow: false,
     };
     el.className = '';
     el.innerHTML = '<div class="bf"><div class="loading" role="status">Loading the day-by-day sale data…</div></div>';
@@ -175,12 +184,17 @@
       if (seq < S.appliedSeq) return;   // an older refresh answering after a newer one never overwrites it
       S.appliedSeq = seq;
       const base = B.refreshMs || 900000, maxSkip = Math.max(0, Math.floor(BACKOFF_CAP_MS / base) - 1);
-      S.errStreak = r.some(o => o.err) ? S.errStreak + 1 : 0;
+      // only the DAILY feed's failures slow the refresh: a config or log tab that fails never delays the figures
+      S.errStreak = r[0].err ? S.errStreak + 1 : 0;
       S.pollSkip = S.errStreak >= 2 ? Math.min(maxSkip, Math.pow(2, S.errStreak - 1) - 1) : 0;
       // nothing changed since the last load: keep the page as it is (chart, open panels); the 60 s timer
-      // still re-checks staleness and the today marker
+      // still re-checks staleness and the today marker. The freshness line still says when the refresh slows down.
       const sig = r.map(o => o.err ? '!' + o.err : o.text).join('\u0000');
-      if (S.loaded && sig === S.sig) { if (!r[0].err) S.lastOkAt = Date.now(); return; }
+      if (S.loaded && sig === S.sig) {
+        if (!r[0].err && !S.fetchError) S.lastOkAt = Date.now();   // an answer that could not be read is not a good load
+        if (S.rows.length && (S.errStreak >= 2) !== S.freshSlow) setHTML('bf-fresh', freshHTML());
+        return;
+      }
       S.sig = sig;
       try { apply(r[0], r[1], r[2]); paint(); } catch (e) { broken(e); }
     });
@@ -190,7 +204,7 @@
   function broken(e) {
     try { if (typeof console !== 'undefined' && console.error) console.error('BFCM view could not show the figures:', e); } catch (_) { /* no console */ }
     try { destroyCharts(); } catch (_) { charts = []; }
-    if (S) S.sig = '';
+    if (S) { S.sig = ''; S.alertsShown = null; S.banners = {}; }
     el.className = '';
     el.innerHTML = '<div class="bf"><div class="bf-alert" role="alert">Something went wrong showing these figures. Please refresh the page.</div></div>';
   }
@@ -198,15 +212,33 @@
     if (d.err) S.fetchError = S.rows.length ? 'refresh' : 'load';   // a failed refresh keeps the last good rows
     else {
       const p = C.parseDaily(d.text, ctx.parseCSV);
-      S.fetchError = null; S.dailyError = p.error; S.rows = p.error ? [] : p.rows;
-      if (!p.error) S.lastOkAt = Date.now();
+      // an answer that cannot be read (empty, cut short, a wrong header) never replaces good rows: it is a failed refresh
+      if (p.error && S.rows.length) S.fetchError = 'refresh';
+      else {
+        S.fetchError = null; S.dailyError = p.error; S.rows = p.error ? [] : p.rows;
+        if (!p.error) S.lastOkAt = Date.now();
+      }
     }
-    // config + log: any failed fetch (network, or Google's HTML error page) keeps the last good settings; with no good
-    // settings yet the unreadable tab is an error (never a guessed budget)
-    if ((c.err || l.err) && S.cfg && !S.cfg.error) { S.cfgKept = true; }
-    else { S.cfg = C.resolveConfig(c.text || '', l.text || '', ctx.parseCSV); S.cfgKept = false; keepHolds(); }
+    // config + log: any failed fetch (network, Google's HTML error page) or an answer that cannot be read keeps the last
+    // good settings; with no good settings yet the unreadable tab is an error (never a guessed budget)
+    const good = !!(S.cfg && !S.cfg.error);
+    if ((c.err || l.err) && good) S.cfgKept = true;
+    else {
+      const r = C.resolveConfig(c.text || '', l.text || '', ctx.parseCSV);
+      if (r.error && good) S.cfgKept = true;
+      else { S.cfg = r; S.cfgKept = false; keepHolds(); settleUnconfirmed(); }
+    }
     S.loaded = true;
     S.dataVersion++;
+  }
+  // a save left "Not confirmed" whose value a fresh read of the sheet now shows did land: it is settled (the "Set by"
+  // line takes over from the Unconfirmed badge)
+  function settleUnconfirmed() {
+    Object.keys(S.saving).forEach(k => {
+      const st = S.saving[k], u = S.unsaved[k];
+      if (!st || st.state !== 'unconfirmed' || !u || unsavedSig(k, u) !== savedSig(k)) return;
+      delete S.unsaved[k]; delete S.saving[k]; delete S.pendingRid[k];
+    });
   }
   // gviz can serve the config from before this person's save for a short while. For HOLD_MS after an ok save (or until
   // gviz shows that value, or a newer save by anyone) the value just saved stays on screen instead of flipping back.
@@ -284,17 +316,29 @@
     const last = S.cfg.last[key];
     return '<div class="bf-newer">Newer saved value: ' + savedText(key) + (last && last.who ? ' by ' + whoHTML(last.who) : '') + '</div>';
   }
+  // the endpoint takes a budget month only when it is in its editable set AND inside the sale dates
   function editableKey(key) {
     const m = /^budget (\d{4}-\d{2})$/.exec(key);
-    if (m) return C.saleMonths(S.cfg.saleStart, S.cfg.saleEnd).indexOf(m[1]) >= 0;
+    if (m) return PAGE_EDITABLE_BUDGET_MONTHS.indexOf(m[1]) >= 0 && C.saleMonths(S.cfg.saleStart, S.cfg.saleEnd).indexOf(m[1]) >= 0;
     return /^target (google_roas|meta_roas|mer)$/.test(key);
   }
   const numOrNull = v => (v === '' || v == null || !isFinite(+v)) ? null : +v;
+  // an unsaved edit in savedSig's shape, so "the same as the saved value" is one string compare
+  const unsavedSig = (key, u) => (u.v == null ? '' : u.v) + (/^budget /.test(key) ? '|' + (u.v2 == null ? '' : u.v2) : '');
+  // the name as the endpoint keeps it (bfcm-config.gs cleanWho_): control characters removed, trimmed, then leading
+  // = + - @ ' (and the spaces between them) stripped; it must then be 1 to 40 characters
+  const cleanWho = s => String(s == null ? '' : s).replace(/[\u0000-\u001F\u007F-\u009F]/g, '').trim().replace(/^[=+\-@'\s]+/, '').trim();
 
   // ---------------------------------------------------------------- public actions (the DOM handlers and the sim use the same ones)
   // user actions paint at once (true); only background refreshes wait for a focused input
   function setPreset(name) { if (!S) return; S.window.preset = PRESETS.some(p => p[0] === name) ? name : 'sale'; S.custom = null; paint(true); }
-  function setCustom(from, to) { if (!S || !isISO(from) || !isISO(to)) return; S.window.preset = 'custom'; S.custom = { from: minD(from, to), to: maxD(from, to) }; paint(true); }
+  // a date picked while a From / To input has focus patches only the window-dependent areas (patchWindow): the inputs are
+  // never rebuilt, because a phone's date picker closes when its input is replaced mid-pick
+  function setCustom(from, to) {
+    if (!S || !isISO(from) || !isISO(to)) return;
+    S.window.preset = 'custom'; S.custom = { from: minD(from, to), to: maxD(from, to) };
+    if (S.loaded && S.rows.length && focusedType() === 'date') patchWindow(); else paint(true);
+  }
   function setMonth(m) { if (!S || !S.cfg || C.saleMonths(S.cfg.saleStart, S.cfg.saleEnd).indexOf(m) < 0) return; S.month = m; paint(true); }
   function setBasis(b) { if (!S) return; S.sliders.basis = (b === 'last14' || b === 'sale') ? b : 'last7'; patchForecast(true); }
   function setSlider(k, v) {
@@ -311,10 +355,11 @@
   function edit(key, v, v2) {
     if (!S || !S.mounted || !canEdit() || !S.cfg || S.cfg.error || !editableKey(key)) return false;
     if (S.saving[key] && !inFlight(key)) delete S.saving[key];
+    S.scopeMsg[scopeOf(key)] = '';   // a new edit clears the "type your name" line of its panel
     const prev = S.unsaved[key];
     S.unsaved[key] = { v: numOrNull(v), v2: numOrNull(v2), base: prev ? prev.base : savedSig(key) };
     const u = S.unsaved[key];
-    if ((u.v == null ? '' : u.v) + (/^budget/.test(key) ? '|' + (u.v2 == null ? '' : u.v2) : '') === u.base) delete S.unsaved[key];   // typed back to the saved value
+    if (unsavedSig(key, u) === u.base) delete S.unsaved[key];   // typed back to the saved value
     patchMeta(); setHTML('bf-pace', paceHTML());
     return true;
   }
@@ -323,17 +368,21 @@
   const TARGET_KEYS = ['target google_roas', 'target meta_roas', 'target mer'];
   const SAVER = () => root.BFCM_SAVE || null;
   const savingOn = () => !!(ctx.CHANNELS.bfcm.endpointUrl && SAVER());
-  // edit controls only when a save can actually happen; configWrites on with no endpoint shows the read-only block
-  const canEdit = () => !!(ctx.CHANNELS.bfcm.configWrites && savingOn());
+  // edit controls only when a save can actually happen (configWrites on with no endpoint shows the read-only block), and
+  // never once the sale is over (sale end + 8)
+  const canEdit = () => !!(ctx.CHANNELS.bfcm.configWrites && savingOn() && !saleOver());
   const inFlight = k => !!(S.saving[k] && (S.saving[k].state === 'saving' || S.saving[k].state === 'checking'));
+  const scopeOf = k => (/^budget /.test(k) ? 'budget' : 'targets');
+  const scopeKeys = scope => (scope === 'targets' ? TARGET_KEYS : ['budget ' + S.month]);
   function patchMeta() { setHTML('bf-budget-meta', budgetMetaHTML()); setHTML('bf-targets-meta', targetsMetaHTML()); }
   // every save state change goes through setSt, so the page's one live region (#bf-live in index.html, outside the
-  // repainted view) announces it; the per-key status lines under the controls are visual only
+  // repainted view) announces it; the per-key status lines under the controls are visual only. quiet: a state the person
+  // already heard about (the queued "Saving…" of a save of several targets is announced once by save())
   const KEY_LABEL = { 'target google_roas': 'Google ROAS target', 'target meta_roas': 'Meta ROAS target', 'target mer': 'MER target' };
   const keyLabel = k => { const m = /^budget \d{4}-(\d{2})$/.exec(k); return m ? MONTH[+m[1] - 1] + ' budget' : (KEY_LABEL[k] || k); };
   function announce(text) { const n = document.getElementById('bf-live'); if (n) n.textContent = text; }
-  function setSt(key, st) { S.saving[key] = st; announce(keyLabel(key) + ': ' + statusPlain(st)); }
-  // a value the endpoint would refuse is named beside its control and never sent
+  function setSt(key, st, quiet) { S.saving[key] = st; if (!quiet) announce(keyLabel(key) + ': ' + statusPlain(st)); }
+  // a value the endpoint would refuse is named beside its control and never sent (the same rules as bfcm-config.gs)
   function blockText(key) {
     const u = S.unsaved[key];
     if (!u) return '';
@@ -341,18 +390,33 @@
       if (u.v == null || u.v < 1 || u.v > 50) return 'Target must be between 1 and 50';
       return Math.abs(u.v * 10 - Math.round(u.v * 10)) > 1e-9 ? 'Use at most one decimal place' : '';
     }
-    return u.v != null && u.v2 == null ? 'Move the Google / Meta split slider to set the split, then save.' : '';
+    if (u.v == null || u.v < 0 || u.v > 500000) return 'Type a budget between 0 and 500,000';
+    if (!Number.isInteger(u.v)) return 'Use whole dollars for the budget';
+    if (u.v2 == null) return 'Move the Google / Meta split slider to set the split, then save.';
+    return (!Number.isInteger(u.v2) || u.v2 < 0 || u.v2 > 100) ? 'The Google share must be a whole number from 0 to 100' : '';
+  }
+  // what an aria-disabled Save says when pressed: the first thing blocking it, else why there is nothing to do
+  function whyNotSave(scope) {
+    const keys = scopeKeys(scope);
+    if (keys.some(inFlight)) return 'Still saving…';
+    for (const k of keys) { const bt = blockText(k); if (bt) return keyLabel(k) + ': ' + bt; }
+    return 'Nothing to save';
   }
   // one person's save: the month's budget (scope 'budget') or every unsaved target (scope 'targets'), one request each
   function save(scope) {
     if (!S || !S.mounted || !S.cfg || S.cfg.error || !canEdit()) return Promise.resolve(false);
-    const keys = (scope === 'targets' ? TARGET_KEYS : ['budget ' + S.month]).filter(k => S.unsaved[k] && !inFlight(k) && !blockText(k));
+    const sc = scope === 'targets' ? 'targets' : 'budget';
+    const keys = scopeKeys(sc).filter(k => S.unsaved[k] && !inFlight(k) && !blockText(k));
     if (!keys.length) return Promise.resolve(false);
-    const who = String(S.who || '').trim();
-    if (!who) { keys.forEach(k => setSt(k, { state: 'needname', text: 'Type your name in the box above, then save.' })); patchMeta(); return Promise.resolve(false); }
+    // the name is checked as the endpoint will check it, so a name it would strip to nothing is never posted; one line
+    // (and one announcement) for the panel, however many targets are waiting
+    const who = cleanWho(S.who);
+    S.scopeMsg[sc] = !who ? 'Type your name in the box above, then save.' : Array.from(who).length > 40 ? 'Use a name of 40 characters or fewer, then save.' : '';
+    if (S.scopeMsg[sc]) { announce(S.scopeMsg[sc]); patchMeta(); return Promise.resolve(false); }
     SAVER().saveName(who);
     const my = gen, live = () => my === gen && S.mounted;
-    keys.forEach(k => setSt(k, { state: 'saving' }));   // queued keys read "Saving…" and their button waits
+    keys.forEach(k => setSt(k, { state: 'saving' }, true));   // queued keys read "Saving…" and their button waits
+    announce(keys.length === 1 ? keyLabel(keys[0]) + ': Saving…' : 'Saving ' + keys.length + ' targets…');
     patchMeta();
     const runs = keys.map(k => (saveQueue = saveQueue.then(() => pause(lastAnswerAt + SAVE_GAP_MS - Date.now())).then(() => saveOne(k, who, my))
       .catch(() => { if (live() && inFlight(k)) { setSt(k, { state: 'unconfirmed' }); patchMeta(); } })));   // never stuck, never "Nothing changed"
@@ -388,7 +452,7 @@
     const pr = S.pendingRid[key];
     if (pr && pr.sig === bodySig(f)) f.rid = pr.rid;
     const sent = { v: u.v, v2: u.v2 };
-    setSt(key, { state: 'saving' }); patchMeta();
+    setSt(key, { state: 'saving' }, true); patchMeta();   // announced by save()
     return SAVER().saveKey(ctx.CHANNELS.bfcm.endpointUrl, f,
       { onRetry: () => { if (live()) { setSt(key, { state: 'checking' }); patchMeta(); } } }).then(r => {
       lastAnswerAt = Date.now();   // the next queued POST waits SAVE_GAP_MS from here
@@ -401,9 +465,14 @@
         if (o.ok && !adopted) patchSaved(key, sent, who, cur && cur[key] && typeof cur[key] === 'object' ? cur[key] : null);
         // only the edit that was sent is settled: one typed while it was in flight stays Unsaved (after an ok save it now
         // builds on the value just saved); saved -> the control shows the saved value; a final refusal reverts (spec 22)
+        // an invalid answer about the name or the request ID says nothing about the value, so the typed value stays
         const now = S.unsaved[key], same = !!now && now.v === sent.v && now.v2 === sent.v2;
+        const reverts = !o.ok && Object.prototype.hasOwnProperty.call(REVERTS, String(o.error)) && !(o.error === 'invalid' && (o.field === 'who' || o.field === 'rid'));
         if (o.ok) { if (same) delete S.unsaved[key]; else if (now) now.base = savedSig(key); holdSaved(key); }
-        else if (same && Object.prototype.hasOwnProperty.call(REVERTS, String(o.error))) delete S.unsaved[key];
+        else if (same && reverts) delete S.unsaved[key];
+        // an edit left over that now equals the saved value has nothing left to save
+        const left = S.unsaved[key];
+        if (left && unsavedSig(key, left) === savedSig(key)) delete S.unsaved[key];
         const lk = S.cfg.last[key] || {};
         setSt(key, !o.ok ? { state: 'rejected', text: 'Not saved: ' + SAVER().reasonText(o) + '. Nothing changed.' }
           : { state: 'saved', at: String(lk.at || ''), who: String(lk.who || who), time: torontoTime(lk.at) || torontoTime(new Date(Date.now()).toISOString()) });
@@ -411,12 +480,21 @@
       patchMeta(); paint();   // the status shows at once; the full repaint waits while a config field has focus
     }).catch(() => { lastAnswerAt = Date.now(); if (live()) { setSt(key, { state: 'unconfirmed' }); patchMeta(); } });   // never stuck on "Saving…", never "Nothing changed"
   }
-  // the server's current values, read exactly as a page load reads the two CSV tabs (only a complete map is adopted)
+  // the server's current values, read exactly as a page load reads the two CSV tabs (only a complete map of the keys the
+  // endpoint can change is adopted). A sale month the endpoint cannot change (a January extension) is never in
+  // `current`, so it keeps what the sheet said.
   function adopt(cur) {
-    const need = C.saleMonths(S.cfg.saleStart, S.cfg.saleEnd).map(m => 'budget ' + m).concat(TARGET_KEYS);
+    const need = PAGE_EDITABLE_BUDGET_MONTHS.map(m => 'budget ' + m).concat(TARGET_KEYS);
     if (!need.every(k => cur[k] && typeof cur[k] === 'object')) return false;
     const t = SAVER().currentToCsv(cur, C.CONFIG_HEADERS, C.LOG_HEADERS), r = C.resolveConfig(t.config, t.log, ctx.parseCSV);
     if (r.error) return false;
+    const old = S.cfg;
+    if (old && !old.error) C.saleMonths(r.saleStart, r.saleEnd).forEach(m => {
+      const k = 'budget ' + m;
+      if (cur[k] || !Object.prototype.hasOwnProperty.call(old.budgets, m)) return;
+      r.budgets[m] = old.budgets[m] ? { total: old.budgets[m].total, pct: old.budgets[m].pct } : null;
+      if (old.last[k]) r.last[k] = { who: old.last[k].who, at: old.last[k].at };
+    });
     S.cfg = r; S.cfgKept = false;
     return true;
   }
@@ -447,21 +525,33 @@
     if (st && (st.state !== 'saved' || fresh)) h += '<div class="bf-status bf-st-' + st.state + '">' + statusHTML(st, label) + '</div>';
     return h;
   }
-  // aria-disabled, never disabled: the button stays focusable, so keyboard focus survives a save
+  // aria-disabled, never disabled: the button stays focusable, so keyboard focus survives a save; it reads "Saving…"
+  // while one of its keys is on its way
   function saveBtnHTML(scope, keys) {
-    const ready = keys.some(k => S.unsaved[k] && !blockText(k)) && !keys.some(inFlight);
-    return '<button type="button" class="bf-save" data-bf="save" data-v="' + scope + '"' + (ready ? '' : ' aria-disabled="true"') + '>Save for everyone</button>';
+    const busy = keys.some(inFlight), ready = keys.some(k => S.unsaved[k] && !blockText(k)) && !busy;
+    return '<button type="button" class="bf-save" data-bf="save" data-v="' + scope + '"' + (ready ? '' : ' aria-disabled="true"') + '>' + (busy ? 'Saving…' : 'Save for everyone') + '</button>';
   }
+  // the panel's own line (no name yet), shown once above its Save button
+  const scopeMsgHTML = sc => (S.scopeMsg[sc] ? '<div class="bf-status bf-st-needname">' + E(S.scopeMsg[sc]) + '</div>' : '');
 
   function onClick(e) {
-    const t = e.target && e.target.closest ? e.target.closest('[data-bf]') : null;
-    if (!t || !S || !S.mounted) return;
-    const a = t.getAttribute('data-bf'), v = t.getAttribute('data-v');
-    if (a === 'preset') setPreset(v);
-    else if (a === 'month') setMonth(v);
-    else if (a === 'basis') setBasis(v);
-    else if (a === 'reset') resetSliders();
-    else if (a === 'save' && t.getAttribute('aria-disabled') !== 'true') { S.focusSave = document.activeElement === t ? v : null; save(v); }
+    try {
+      const t = e.target && e.target.closest ? e.target.closest('[data-bf]') : null;
+      if (!t || !S || !S.mounted) return;
+      const a = t.getAttribute('data-bf'), v = t.getAttribute('data-v');
+      if (a === 'preset') setPreset(v);
+      else if (a === 'month') setMonth(v);
+      else if (a === 'basis') setBasis(v);
+      else if (a === 'reset') resetSliders();
+      else if (a === 'save') {
+        if (t.getAttribute('aria-disabled') === 'true') announce(whyNotSave(v));   // a pressed aria-disabled Save says why
+        else { S.focusSave = document.activeElement === t ? v : null; save(v); }
+      }
+    } finally {
+      // a repaint held back while focus moved from a field to this button runs after the click (and after a panel
+      // toggle's own open / close, which the browser applies once the click handlers return)
+      if (S && S.paintAfterClick) { S.paintAfterClick = false; setTimeout(runHeld, 0); }
+    }
   }
   function onInput(e) {
     const t = e.target;
@@ -472,7 +562,14 @@
       const key = 'budget ' + S.month, tot = document.getElementById('bf-budget-total'), pct = document.getElementById('bf-budget-pct');
       const total = tot ? tot.value : null, blank = total == null || String(total).trim() === '';
       if (a === 'budget-pct' && blank) return;   // no split without a total
-      if (pct && a === 'budget-total') pct.disabled = blank;   // the split slider wakes up once a total is typed
+      if (pct && a === 'budget-total') {
+        // the split slider wakes up once a total is typed, and its "Type a total to set the split." hint goes
+        pct.disabled = blank;
+        const hint = document.getElementById('bf-split-hint');
+        if (hint) hint.hidden = !blank;
+        if (blank) pct.setAttribute('aria-describedby', 'bf-split-hint'); else if (typeof pct.removeAttribute === 'function') pct.removeAttribute('aria-describedby');
+      }
+      if (pct && a === 'budget-pct' && typeof pct.removeAttribute === 'function') pct.removeAttribute('aria-valuetext');   // a moved slider is a real split
       // the split goes with the edit only once the slider was moved; otherwise the saved split (blank stays blank), so
       // typing a total never silently creates the slider's 50 / 50 default
       const u = S.unsaved[key], saved = S.cfg && !S.cfg.error ? S.cfg.budgets[S.month] : null;
@@ -490,8 +587,16 @@
     }
   }
   // a held repaint runs once focus has left the field that held it (a 60 s repaint held by a slider or date field waits
-  // while focus stays on one; one held for new data only waits for the config fields)
-  function onFocusOut() { if (S && S.pendingPaint) setTimeout(() => { if (S && S.mounted && S.pendingPaint && !editing() && (S.pendingData || !tickHeld())) paint(); }, 0); }
+  // while focus stays on one; one held for new data only waits for the config fields). When focus is leaving for a
+  // button or panel toggle of the view, the repaint waits for that click instead: a rebuild between the press and the
+  // click would swallow the click.
+  function runHeld() { if (S && S.mounted && S.pendingPaint && !editing() && (S.pendingData || !tickHeld())) paint(); }
+  function onFocusOut(e) {
+    if (!S || !S.pendingPaint) return;
+    const rt = e && e.relatedTarget, hit = rt && typeof rt.closest === 'function' ? rt.closest('[data-bf]') : null;
+    if (hit && (hit.tagName === 'BUTTON' || hit.tagName === 'SUMMARY')) { S.paintAfterClick = true; return; }
+    setTimeout(runHeld, 0);
+  }
 
   // ---------------------------------------------------------------- render
   // userAction: a person's own action paints at once. Otherwise a focused config field holds the repaint, and a repaint
@@ -505,7 +610,9 @@
       if (!fromTick) S.pendingData = true;
       S.stale = S.rows.length ? C.staleness(S.rows, new Date(Date.now())) : null;
       S.staleKey = staleKeyOf(S.stale);
-      setHTML('bf-alerts', alertsHTML());
+      const list = bannerList(), ah = alertsHTML(list);
+      if (ah !== S.alertsShown) { setHTML('bf-alerts', ah); S.alertsShown = ah; }   // unchanged banners are left alone
+      announceBanners(list.concat(cfgBanner()));
       if (S.rows.length) setHTML('bf-fresh', freshHTML());
       return;
     }
@@ -520,32 +627,61 @@
     S.staleKey = staleKeyOf(S.stale);
     if (!S.month || C.saleMonths(S.cfg.saleStart, S.cfg.saleEnd).indexOf(S.month) < 0) S.month = defaultMonth();   // the sale window can move under a picked month
     computeWindow();
-    let h = '<div class="bf"><div id="bf-alerts" class="bf-alerts">' + alertsHTML() + '</div>' + phaseHTML();
-    if (S.rows.length) h += dateBarHTML() + budgetHTML() + returnsHTML() + forecastHTML();
+    const list = bannerList(), ah = alertsHTML(list);
+    let h = '<div class="bf"><div id="bf-alerts" class="bf-alerts">' + ah + '</div>' + phaseHTML();
+    if (S.rows.length) h += dateBarHTML() + budgetHTML() + '<div id="bf-ret" class="bf-ret">' + returnsHTML() + '</div>' + forecastHTML();
     el.className = '';
     el.innerHTML = h + '</div>';
+    S.alertsShown = ah;
     const wb = document.getElementById('bf-who');
     if (wb) wb.value = S.who || '';   // by property: a typed name never goes into an attribute
     if (S.rows.length) { drawChart(); fcLabels(); }
     refocus(focus);
+    announceBanners(list.concat(cfgBanner()));
+  }
+  // a custom range picked in From / To (setCustom while a date input has focus): only the areas that depend on the
+  // window are written (preset buttons, the range label, the no-data note, the whole Returns band); the date inputs,
+  // the budget band and the forecast stay as they are. Focus is on a date input, so none of these areas holds it.
+  function patchWindow() {
+    computeWindow();
+    put('bf-presets', presetsHTML()); put('bf-wl', wlText()); put('bf-nodays', nodaysHTML());
+    const d = typeof el.querySelector === 'function' ? el.querySelector('.bf-days') : null;
+    S.open = Object.assign({}, S.open, { days: !!(d && d.open) });   // an open day table stays open
+    destroyCharts();
+    put('bf-ret', returnsHTML());
+    drawChart();
   }
 
-  function alertsHTML() {
-    let h = '';
-    const over = saleOver();
-    if (S.pendingPaint && S.dataVersion !== S.paintedVersion) h += '<div class="bf-stale" role="status">Newer figures have loaded. They appear when you finish typing in the budget, target or name field.</div>';
-    if (S.fetchError === 'load') h += '<div class="bf-alert" role="alert">We could not load the BFCM sale data just now. The page keeps trying, or refresh the page.</div>';
-    if (S.fetchError === 'refresh') h += '<div class="bf-stale" role="status">The latest refresh did not load, so these figures are from the load at ' + torontoTime(new Date(S.lastOkAt).toISOString()) + ' Toronto time.</div>';
-    if (S.dailyError) h += '<div class="bf-alert" role="alert">The day-by-day data feed needs attention, so the figures are hidden rather than risk showing the wrong numbers. Please let your Elite Brands team know.</div>';
-    if (!S.fetchError && !S.dailyError && !S.rows.length) h += '<div class="bf-info" role="status">The sale data has not started coming in yet.</div>';
-    if (over && S.rows.length) h += '<div class="bf-info" role="status">The sale has ended. These are the final figures.</div>';
+  // the banners above the view, each {key, cls, html}. None carries a role: every repaint re-inserts them, and a
+  // screen reader would read them again each time; announceBanners says each one once instead
+  function bannerList() {
+    const out = [], over = saleOver(), add = (key, cls, html) => out.push({ key, cls, html });
+    if (S.pendingPaint && S.dataVersion !== S.paintedVersion) add('pending', 'bf-stale', 'Newer figures have loaded. They appear when you finish typing in the budget, target or name field.');
+    if (S.fetchError === 'load') add('load', 'bf-alert', 'We could not load the BFCM sale data just now. The page keeps trying, or refresh the page.');
+    if (S.fetchError === 'refresh') add('refresh', 'bf-stale', 'The latest refresh did not load, so these figures are from the load at ' + torontoTime(new Date(S.lastOkAt).toISOString()) + ' Toronto time.');
+    if (S.dailyError) add('daily', 'bf-alert', 'The day-by-day data feed needs attention, so the figures are hidden rather than risk showing the wrong numbers. Please let your Elite Brands team know.');
+    if (!S.fetchError && !S.dailyError && !S.rows.length) add('nodata', 'bf-info', 'The sale data has not started coming in yet.');
+    if (S.rows.length && over) add('ended', 'bf-info', 'The sale has ended. These are the final figures.');
+    else if (S.rows.length && saleEnded()) add('ended', 'bf-info', 'The sale has ended. The last few days may still change a little.');
     if (S.rows.length && S.stale && !over) SOURCES.forEach(s => {
       const o = S.stale[s];
       if (!o.stale) return;
-      h += '<div class="bf-stale" role="status"><b>' + (o.newest ? TITLE[s] + ' data last updated ' + torontoTime(o.newest) + ' Toronto time.' : TITLE[s] + ' data has not loaded yet.') +
-        '</b> Every figure that uses it is marked "uses stale ' + NAME[s] + ' data".</div>';
+      add('stale ' + s, 'bf-stale', '<b>' + (o.newest ? TITLE[s] + ' data last updated ' + torontoTime(o.newest) + ' Toronto time.' : TITLE[s] + ' data has not loaded yet.') +
+        '</b> Every figure that uses it is marked "uses stale ' + NAME[s] + ' data".');
     });
-    return h;
+    return out;
+  }
+  const alertsHTML = list => list.map(b => '<div class="' + b.cls + '">' + b.html + '</div>').join('');
+  // the budget band's own alert (unreadable settings), announced like a banner
+  const cfgErrText = () => (S.cfg.error === C.SALE_DATES_ERROR ? 'The sale dates in the settings are not valid' : 'Budget settings could not be read') +
+    ', so pacing against budget is hidden. Spend and where it lands are still live.';
+  const cfgBanner = () => (S.rows.length && S.cfg && S.cfg.error ? [{ key: 'cfg', html: cfgErrText() }] : []);
+  // #bf-live says a banner once: when it first appears or its words change (never on a repaint that keeps it as it was)
+  function announceBanners(list) {
+    const prev = S.banners || {}, now = {}, said = [];
+    list.forEach(b => { const t = b.html.replace(/<[^>]+>/g, ''); now[b.key] = t; if (prev[b.key] !== t) said.push(t); });
+    S.banners = now;
+    if (said.length) announce(said.join(' '));
   }
 
   function phaseHTML() {
@@ -557,21 +693,29 @@
       '<div class="bf-today">Today · ' + dshort(t) + ' · ' + where + '</div></div>';
   }
 
+  // the date bar; the preset buttons, the range label and the no-data note sit in their own wrappers so patchWindow can
+  // rewrite them without touching the From / To inputs
   function dateBarHTML() {
-    const w = S.window, ms = C.saleMonths(S.cfg.saleStart, S.cfg.saleEnd).map(m => m.slice(4));
-    const btn = p => '<button type="button" class="bf-pre" data-bf="preset" data-v="' + p[0] + '" aria-pressed="' + (w.preset === p[0]) + '">' + p[1] + '</button>';
-    const presets = PRESETS.filter(p => !PRESET_MONTH[p[0]] || ms.indexOf(PRESET_MONTH[p[0]]) >= 0).map(btn).join('');
-    const first = S.rows[0].date, last = S.rows[S.rows.length - 1].date, n = C.daysBetween(w.from, w.to) + 1;
-    return '<div><div class="bf-datebar" role="group" aria-label="Date range">' + presets +
+    const w = S.window, first = S.rows[0].date, last = S.rows[S.rows.length - 1].date;
+    return '<div><div class="bf-datebar" role="group" aria-label="Date range"><span id="bf-presets" class="bf-presets">' + presetsHTML() + '</span>' +
       '<label>From <input type="date" id="bf-from" data-bf="from" value="' + w.from + '" min="' + first + '" max="' + last + '"></label>' +
       '<label>To <input type="date" id="bf-to" data-bf="to" value="' + w.to + '" min="' + first + '" max="' + last + '"></label>' +
-      '<span class="bf-wl">' + drange(w.from, w.to) + ' · ' + n + (n === 1 ? ' day' : ' days') + '</span></div>' +
-      (w.from > last ? '<div class="bf-note">No days of data in this range yet.</div>' : '') +
+      '<span class="bf-wl" id="bf-wl">' + wlText() + '</span></div>' +
+      '<div id="bf-nodays" class="bf-nodays">' + nodaysHTML() + '</div>' +
       '<div class="bf-fresh" id="bf-fresh">' + freshHTML() + '</div></div>';
   }
+  function presetsHTML() {
+    const w = S.window, ms = C.saleMonths(S.cfg.saleStart, S.cfg.saleEnd).map(m => m.slice(4));
+    const btn = p => '<button type="button" class="bf-pre" data-bf="preset" data-v="' + p[0] + '" aria-pressed="' + (w.preset === p[0]) + '">' + p[1] + '</button>';
+    return PRESETS.filter(p => !PRESET_MONTH[p[0]] || ms.indexOf(PRESET_MONTH[p[0]]) >= 0).map(btn).join('');
+  }
+  const wlText = () => { const w = S.window, n = C.daysBetween(w.from, w.to) + 1; return drange(w.from, w.to) + ' · ' + n + (n === 1 ? ' day' : ' days'); };
+  const nodaysHTML = () => (S.window.from > S.rows[S.rows.length - 1].date ? '<div class="bf-note">No days of data in this range yet.</div>' : '');
   function freshHTML() {
+    S.freshSlow = S.errStreak >= 2;   // the refresh backs off after 2 failed daily loads in a row (poll)
     const fresh = SOURCES.map(s => { const o = S.stale[s]; return TITLE[s] + ' ' + (o.newest ? torontoTime(o.newest) : 'not loaded'); }).join(' · ');
-    return 'Data updated ' + fresh + ' (Toronto time). Refreshes every 15 minutes while this page is open.' + (S.cfgKept ? ' Budget settings are from the previous load.' : '');
+    return 'Data updated ' + fresh + ' (Toronto time). Refreshes every 15 minutes while this page is open' + (S.freshSlow ? ' (slower while the sheet is not answering)' : '') + '.' +
+      (S.cfgKept ? ' Budget settings are from the previous load.' : '');
   }
 
   // ---- band 1: budget + pacing
@@ -580,8 +724,7 @@
     const mlabel = m => { const end = C.addDays(m + '-01', 40).slice(0, 7) + '-01', last = C.addDays(end, -1); return MONTH[+m.slice(5) - 1] + (S.cfg.saleEnd < last && S.cfg.saleEnd.slice(0, 7) === m ? ' (to ' + dshort(S.cfg.saleEnd) + ')' : ''); };
     const seg = ms.map(m => '<button type="button" class="bf-pre" data-bf="month" data-v="' + m + '" aria-pressed="' + (S.month === m) + '">' + mlabel(m) + '</button>').join('');
     let left = '<div class="bf-lbl">Month</div><div class="bf-segrow" role="group" aria-label="Budget month">' + seg + '</div>';
-    if (S.cfg.error) left += '<div class="bf-alert" role="status">' + (S.cfg.error === C.SALE_DATES_ERROR ? 'The sale dates in the settings are not valid' : 'Budget settings could not be read') +
-      ', so pacing against budget is hidden. Spend and where it lands are still live.</div>';
+    if (S.cfg.error) left += '<div class="bf-alert">' + cfgErrText() + '</div>';   // no role: announced once (announceBanners)
     else if (canEdit()) left += editControlsHTML();
     else left += readOnlyBudgetHTML();
     return '<div class="bf-band">1 · Budget</div><div class="bf-budget"><div class="bf-set">' + left + '</div>' +
@@ -598,10 +741,15 @@
     const at = torontoTime(last.at);
     return '<div class="bf-note">Set by ' + whoHTML(last.who) + (at ? ' · ' + at + ' Toronto time' : '') + '</div>';
   }
+  // the month's saved budget as text (the read-only block, and a sale month the endpoint cannot change)
+  function budgetReadHTML(key) {
+    const b = S.cfg.budgets[S.month];
+    return '<div class="bf-lbl">' + MONTH[+S.month.slice(5) - 1] + ' budget (CAD) · Google + Meta</div>' +
+      (b ? '<div class="bf-big">' + m$(b.total) + '</div>' + splitHTML(b) + setBy(key) : '<div class="bf-big">No budget set</div><div class="bf-note">Spend and where it lands are still shown.</div>');
+  }
   function readOnlyBudgetHTML() {
-    const key = 'budget ' + S.month, b = S.cfg.budgets[S.month], T = S.cfg.targets;
-    let h = '<div class="bf-lbl">' + MONTH[+S.month.slice(5) - 1] + ' budget (CAD) · Google + Meta</div>';
-    h += b ? '<div class="bf-big">' + m$(b.total) + '</div>' + splitHTML(b) + setBy(key) : '<div class="bf-big">No budget set</div><div class="bf-note">Spend and where it lands are still shown.</div>';
+    const key = 'budget ' + S.month, T = S.cfg.targets;
+    let h = budgetReadHTML(key);
     h += '<div class="bf-lbl bf-gap">Targets</div><div class="bf-note">Google ROAS ' + x(T.google_roas) + ' · Meta ROAS ' + x(T.meta_roas) + ' · MER ' + x(T.mer) + '</div>';
     [['target google_roas', 'Google ROAS'], ['target meta_roas', 'Meta ROAS'], ['target mer', 'MER']].forEach(k => {
       const last = S.cfg.last[k[0]];
@@ -609,16 +757,24 @@
     });
     return h;
   }
-  // edit controls (configWrites:true with an endpoint only). Input values are numbers, never sheet strings. The split
-  // slider is disabled while there is no total (a split needs a total to split).
+  // edit controls (configWrites:true with an endpoint, before the sale is over). Input values are numbers, never sheet
+  // strings. The split slider is disabled while there is no total (a split needs a total to split), with a hint saying
+  // so; a blank split reads "Split not set" (aria-valuetext), never the slider's resting 50. A sale month the endpoint
+  // cannot change shows its budget read-only ("Set in the sheet"); the targets stay editable.
   function editControlsHTML() {
-    const b = budgetFor(S.month), T = S.cfg.targets;
+    const key = 'budget ' + S.month, T = S.cfg.targets;
     const num = v => fin(v) ? String(v) : '';
-    let h = '<label class="bf-lbl" for="bf-budget-total">' + MONTH[+S.month.slice(5) - 1] + ' budget (CAD) · Google + Meta</label>' +
-      '<input id="bf-budget-total" type="number" data-bf="budget-total" value="' + num(b && b.total) + '" min="0" max="500000" step="100" inputmode="numeric">' +
-      '<input id="bf-budget-pct" class="bf-range" type="range" data-bf="budget-pct" value="' + (b && fin(b.pct) ? b.pct : 50) + '" min="0" max="100" step="1" aria-label="Google share of the budget, percent"' + (b && fin(b.total) ? '' : ' disabled') + '>' +
-      '<label class="bf-lbl" for="bf-who">Your name (saved with each change)</label><input id="bf-who" type="text" data-bf="who" maxlength="40" autocomplete="name">' +
-      '<div id="bf-budget-meta">' + budgetMetaHTML() + '</div>';
+    const whoBox = '<label class="bf-lbl" for="bf-who">Your name (saved with each change)</label><input id="bf-who" type="text" data-bf="who" maxlength="40" autocomplete="name">';
+    let h;
+    if (editableKey(key)) {
+      const b = budgetFor(S.month), hasTotal = !!(b && fin(b.total)), split = b && fin(b.pct) ? b.pct : null;
+      h = '<label class="bf-lbl" for="bf-budget-total">' + MONTH[+S.month.slice(5) - 1] + ' budget (CAD) · Google + Meta</label>' +
+        '<input id="bf-budget-total" type="number" data-bf="budget-total" value="' + num(b && b.total) + '" min="0" max="500000" step="100" inputmode="numeric">' +
+        '<input id="bf-budget-pct" class="bf-range" type="range" data-bf="budget-pct" value="' + (split == null ? 50 : split) + '" min="0" max="100" step="1" aria-label="Google share of the budget, percent"' +
+        (split == null ? ' aria-valuetext="Split not set"' : '') + (hasTotal ? '' : ' disabled aria-describedby="bf-split-hint"') + '>' +
+        '<div class="bf-note" id="bf-split-hint"' + (hasTotal ? ' hidden' : '') + '>Type a total to set the split.</div>' +
+        whoBox + '<div id="bf-budget-meta">' + budgetMetaHTML() + '</div>';
+    } else h = budgetReadHTML(key) + '<div class="bf-note">Set in the sheet, not on this page.</div>' + whoBox;
     h += '<details class="bf-targets"' + (S.open && S.open.targets ? ' open' : '') + '><summary data-bf="panel" data-v="targets">Targets</summary>' + [['target google_roas', 'Google ROAS', 'google_roas'], ['target meta_roas', 'Meta ROAS', 'meta_roas'], ['target mer', 'MER', 'mer']].map(k => {
       const u = S.unsaved[k[0]], v = u ? u.v : T[k[2]];
       return '<label class="bf-trow">' + k[1] + ' <input type="number" data-bf="target" data-key="' + k[0] + '" value="' + num(v) + '" min="1" max="50" step="0.1"></label>';
@@ -628,12 +784,13 @@
   function budgetMetaHTML() {
     if (!S.cfg || S.cfg.error) return '';
     const key = 'budget ' + S.month;
-    return splitHTML(budgetFor(S.month)) + keyMeta(key, '') + saveBtnHTML('budget', [key]) +
+    if (!editableKey(key)) return '';   // a month set in the sheet has no Save
+    return splitHTML(budgetFor(S.month)) + keyMeta(key, '') + scopeMsgHTML('budget') + saveBtnHTML('budget', [key]) +
       '<div class="bf-note">Saved budgets are shared with everyone who opens this page.</div>';
   }
   function targetsMetaHTML() {
     if (!S.cfg || S.cfg.error) return '';
-    return [['target google_roas', 'Google ROAS'], ['target meta_roas', 'Meta ROAS'], ['target mer', 'MER']].map(k => keyMeta(k[0], k[1])).join('') + saveBtnHTML('targets', TARGET_KEYS);
+    return [['target google_roas', 'Google ROAS'], ['target meta_roas', 'Meta ROAS'], ['target mer', 'MER']].map(k => keyMeta(k[0], k[1])).join('') + scopeMsgHTML('targets') + saveBtnHTML('targets', TARGET_KEYS);
   }
   const BAND = { under: 'under pace', ok: 'on pace', amber: 'slightly over', red: 'over budget' };
   function paceHTML() {

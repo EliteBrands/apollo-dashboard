@@ -184,6 +184,25 @@ test('presetRange: sale, last7, week, oct, nov, dec, custom', () => {
   assert.deepEqual(c, { from: '2026-10-13', to: '2026-10-15', label: '13 Oct to 15 Oct' });
 });
 
+test('check-deep pass 2 P9: a daily answer cut short (a row with fewer cells than the header) is an error, never partial rows', () => {
+  const full = dailyCsv(octSpecs.slice(0, 3));
+  assert.equal(C.parseDaily(full, parseCSV).error, null);
+  const cut = full.slice(0, full.length - 30);   // cut inside the last row
+  const p = C.parseDaily(cut, parseCSV);
+  assert.equal(p.error, 'BFCM Daily answer was cut short');
+  assert.deepEqual(p.rows, []);
+  assert.equal(C.parseDaily([HDR.map(q).join(','), '"2026-10-01","617.25"'].join('\n'), parseCSV).error, 'BFCM Daily answer was cut short');
+  assert.equal(C.parseDaily('', parseCSV).error, 'BFCM Daily header does not match');
+});
+
+test('check-deep pass 2 L13: presetRange custom with no (or an impossible) custom range falls back to Sale to date', () => {
+  const sale = C.presetRange('sale', '2026-10-16', cfg, rows);
+  assert.deepEqual(C.presetRange('custom', '2026-10-16', cfg, rows, null), sale);
+  assert.deepEqual(C.presetRange('custom', '2026-10-16', cfg, rows), sale);
+  assert.deepEqual(C.presetRange('custom', '2026-10-16', cfg, rows, { from: '2026-02-30', to: '2026-10-14' }), sale);
+  assert.deepEqual(C.presetRange('custom', '2026-10-16', cfg, rows, { from: '2026-10-13' }), sale);
+});
+
 test('a gap inside the window nulls that source, a trailing gap shortens it', () => {
   const noMeta5 = octSpecs.map(x => x.d === '2026-10-05' ? Object.assign({}, x, { m: [] }) : x);
   const r = parse(noMeta5).rows;

@@ -56,14 +56,17 @@
   // -> Promise<{state: 'saved' | 'duplicate' | 'rejected' | 'unconfirmed', response?, rid}>
   var RID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   function saveKey(url, f, opts) {
-    var rid = typeof f.rid === 'string' && RID_RE.test(f.rid) ? f.rid : newRid();
+    var reused = typeof f.rid === 'string' && RID_RE.test(f.rid);
+    var rid = reused ? f.rid : newRid();
     var body = JSON.stringify({ rid: rid, key: f.key, value: f.value, value2: f.value2, expect: f.expect, expect2: f.expect2, who: f.who });
     function answered(o) { return { state: o.ok ? (o.duplicate === true ? 'duplicate' : 'saved') : 'rejected', response: o, rid: rid }; }
     function retried(o) {
       var settles = o.ok || (typeof o.error === 'string' && Object.prototype.hasOwnProperty.call(CONCLUSIVE_ON_RETRY, o.error));
       return settles ? answered(o) : { state: 'unconfirmed', response: o, rid: rid };
     }
-    return post(url, body).then(answered, function () {
+    // a rid re-used after "Not confirmed" may belong to a save the server is still committing, so even its FIRST answer
+    // is judged like a retry: busy, closed or anything unknown stays unconfirmed (and the view keeps the rid)
+    return post(url, body).then(reused ? retried : answered, function () {
       if (opts && typeof opts.onRetry === 'function') opts.onRetry();
       return new Promise(function (r) { setTimeout(r, RETRY_DELAY_MS); })
         .then(function () { return post(url, body); })

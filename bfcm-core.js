@@ -97,6 +97,9 @@
     var byDate = {};
     for (var i = 1; i < recs.length; i++) {
       var r = recs[i], date = r[0];
+      // gviz writes every column of every row, so a record with fewer cells than the header is an answer that was cut
+      // short (check-deep pass 2 P9): an error, never partial rows (the view then keeps its last good rows)
+      if (r.length < DAILY_HEADERS.length) return { rows: [], error: 'BFCM Daily answer was cut short' };
       if (!ISO_RE.test(date)) continue;
       var gs = num(r[1]), ms = num(r[4]), sr = num(r[13]);
       byDate[date] = {
@@ -286,7 +289,10 @@
       case 'oct': from = year + '-10-01'; to = year + '-10-31'; label = 'October'; break;
       case 'nov': from = year + '-11-01'; to = year + '-11-30'; label = 'November'; break;
       case 'dec': from = year + '-12-01'; to = minDate(year + '-12-31', cfg.saleEnd); label = 'December'; break;
-      default: from = custom && custom.from; to = custom && custom.to; label = null;
+      default:
+        // a custom window needs two real days; anything else (none given, an impossible date) is Sale to date (pass 2 L13)
+        if (!custom || !realDate(custom.from) || !realDate(custom.to)) return presetRange('sale', todayISO, cfg, rows, null);
+        from = custom.from; to = custom.to; label = null;
     }
     if (oldest) from = maxDate(from, oldest);
     if (newest) to = minDate(to, newest);
