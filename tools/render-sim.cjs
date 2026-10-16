@@ -138,6 +138,16 @@ function makeClock(startIso) {
 //   page   - page file (default PAGE)          bfcm  - {daily, config, log} texts (default BFX)
 //   clock  - makeClock(): fake Date.now, timers, document.visibilityState + listeners
 //   location - {hash, pathname, search}       patch - [[from, to], ...] applied to the inline script
+//   post   - (n, init) => Promise: the config endpoint's answer to the n-th POST (default: network error)
+//   storage / crypto - localStorage and crypto stubs (BFCM boots only; defaults: an empty store, a counting randomUUID)
+function makeStorage(init, throws) {
+  const m = new Map(Object.entries(init || {}));
+  return {
+    _m: m,
+    getItem(k) { if (throws) throw new Error('SecurityError'); return m.has(k) ? m.get(k) : null; },
+    setItem(k, v) { if (throws) throw new Error('QuotaExceededError'); m.set(k, String(v)); },
+  };
+}
 function bootPage(csvText, metaCsvText, merCsvText, opts) {
   opts = opts || {};
   const parts = pageParts(opts.page || PAGE);
@@ -169,10 +179,15 @@ function bootPage(csvText, metaCsvText, merCsvText, opts) {
     documentStub.removeEventListener = (ev, fn) => { documentStub._listeners[ev] = (documentStub._listeners[ev] || []).filter(f => f !== fn); };
     documentStub.fire = ev => (documentStub._listeners[ev] || []).slice().forEach(fn => fn({ type: ev }));
   }
+  const postLog = [];
   const sandbox = {
     window: {}, document: documentStub, Chart: ChartStub,
-    fetch: (url) => {
+    fetch: (url, init) => {
       const u = String(url);
+      if (init && init.method === 'POST') {   // the config endpoint (Task 11); never a sheet CSV
+        postLog.push({ url: u, init });
+        return opts.post ? opts.post(postLog.length, init) : Promise.reject(new TypeError('Failed to fetch'));
+      }
       fetchLog.push(u);
       // BFCM tabs first; the Log URL contains the Config URL, so it is matched before it
       const body = u.includes('sheet=BFCM%20Daily') ? bf.daily
@@ -193,6 +208,10 @@ function bootPage(csvText, metaCsvText, merCsvText, opts) {
   if (opts.clock) {
     const c = opts.clock;
     Object.assign(sandbox, { setTimeout: c.setTimeout, clearTimeout: c.clear, setInterval: c.setInterval, clearInterval: c.clear, __simNow: c.now });
+    let uuidN = 0;
+    sandbox.localStorage = opts.storage || makeStorage();
+    sandbox.crypto = 'crypto' in opts ? opts.crypto : { randomUUID: () => 'f0000000-0000-4000-8000-' + String(++uuidN).padStart(12, '0') };
+    sandbox.AbortSignal = { timeout: ms => ({ simTimeoutMs: ms }) };   // marker: the sim asserts the page asks for a 15 s timeout signal
   }
   if (opts.location) { sandbox.location = opts.location; sandbox.history = { replaceState() {} }; }
   sandbox.globalThis = sandbox;
@@ -200,7 +219,7 @@ function bootPage(csvText, metaCsvText, merCsvText, opts) {
   if (opts.clock) vm.runInContext('Date.now = function () { return __simNow(); };', sandbox);
   for (const src of parts.srcs) vm.runInContext(fs.readFileSync(path.join(parts.dir, src), 'utf8'), sandbox, { filename: src });
   vm.runInContext(code, sandbox, { filename: 'apollo-page.js' });
-  return { sandbox, els, createdCharts, code, fetchLog, documentStub, bf };
+  return { sandbox, els, createdCharts, code, fetchLog, postLog, documentStub, bf };
 }
 const flush = () => new Promise(r => setImmediate(() => setImmediate(r)));
 
@@ -219,11 +238,11 @@ async function main() {
   fs.unlinkSync(tmp);
   check('page script passes node --check', syntaxOK);
   {
-    // v4: the page loads bfcm-core.js + bfcm-view.js (cache-busted ?v=4.0.0) BEFORE the inline script
+    // v4: the page loads bfcm-core.js + bfcm-view.js + bfcm-save.js (cache-busted ?v=4.0.0) BEFORE the inline script
     const parts = pageParts(PAGE);
-    check('page loads bfcm-core.js and bfcm-view.js (?v=4.0.0) before the inline script',
-      /<script src="bfcm-core\.js\?v=4\.0\.0"><\/script>\s*<script src="bfcm-view\.js\?v=4\.0\.0"><\/script>\s*<script>/.test(html) && parts.srcs.join() === 'bfcm-core.js,bfcm-view.js');
-    for (const f of ['bfcm-core.js', 'bfcm-view.js']) {
+    check('page loads bfcm-core.js, bfcm-view.js and bfcm-save.js (?v=4.0.0) before the inline script',
+      /<script src="bfcm-core\.js\?v=4\.0\.0"><\/script>\s*<script src="bfcm-view\.js\?v=4\.0\.0"><\/script>\s*<script src="bfcm-save\.js\?v=4\.0\.0"><\/script>\s*<script>/.test(html) && parts.srcs.join() === 'bfcm-core.js,bfcm-view.js,bfcm-save.js');
+    for (const f of ['bfcm-core.js', 'bfcm-view.js', 'bfcm-save.js']) {
       let ok = true;
       try { execFileSync(process.execPath, ['--check', path.join(parts.dir, f)], { stdio: 'pipe' }); } catch (e) { ok = false; }
       check(f + ' passes node --check', ok);
@@ -781,15 +800,18 @@ async function main() {
     o = o || {};
     const clock = makeClock(o.now || '2026-10-17T18:00:00.000Z');
     const bf = Object.assign({}, BFX, o.bf || {});
-    const t = bootPage(csv, metaCsv, merCsv, { clock, bfcm: bf, patch: o.patch, location: o.location });
+    const bo = { clock, bfcm: bf, patch: o.patch, location: o.location, post: o.post, storage: o.storage };
+    if ('crypto' in o) bo.crypto = o.crypto;
+    const t = bootPage(csv, metaCsv, merCsv, bo);
     await flush();
     const TA = t.sandbox.window.__apollo, V = t.sandbox.BFCM_VIEW;
     if (o.open !== false) {
       TA.CHANNELS.bfcm.enabled = true;
       if (o.configWrites) TA.CHANNELS.bfcm.configWrites = true;
+      if (o.endpoint) TA.CHANNELS.bfcm.endpointUrl = o.endpoint;
       await TA.switchChannel('bfcm'); await flush();
     }
-    return { t, TA, V, clock, bf, html: () => String(t.els.content.innerHTML || '') };
+    return { t, TA, V, clock, bf, posts: t.postLog, html: () => String(t.els.content.innerHTML || '') };
   };
 
   if (bfOK) {
@@ -1050,11 +1072,11 @@ async function main() {
       check('slider / basis / reset before the data loads do not throw', ok);
     }
 
-    // ---- config edit controls (configWrites:true in the sandbox; saving arrives in Task 11)
+    // ---- config edit controls (configWrites:true in the sandbox; endpointUrl stays '' as shipped)
     {
       const { V, clock, bf, html } = await bootBfcm({ now: '2026-10-17T12:00:00.000Z', configWrites: true });
       const h = html();
-      check('configWrites:true: budget total, split slider, Save button and Targets panel render', /data-bf="budget-total"/.test(h) && /data-bf="budget-pct"/.test(h) && /Save for everyone/.test(h) && /data-bf="target"/.test(h) && /Targets/.test(h));
+      check('configWrites:true: budget total, split slider, Save button and Targets panel render', /data-bf="budget-total"/.test(h) && /data-bf="budget-pct"/.test(h) && /data-bf="save"/.test(h) && /data-bf="target"/.test(h) && /Targets/.test(h));
       check('controls show the current values (log over defaults)', /data-bf="budget-total"[^>]*value="32000"/.test(h) && /data-bf="budget-pct"[^>]*value="70"/.test(h));
       check('no config string or who in an attribute (spec 23)', !/="[^"]*(Mac|onerror)[^"]*"/.test(h));
       check('edit() marks the budget Unsaved', V.edit('budget 2026-10', 45000, 60) === true && !!V._state.unsaved['budget 2026-10']);
@@ -1064,6 +1086,205 @@ async function main() {
       check('refresh adopts the newer saved value in state (35000)', V._state.cfg.budgets['2026-10'] && V._state.cfg.budgets['2026-10'].total === 35000);
       check('refresh keeps the unsaved budget in its control (45000, 60%)', /data-bf="budget-total"[^>]*value="45000"/.test(h2) && /data-bf="budget-pct"[^>]*value="60"/.test(h2) && /Unsaved/.test(h2));
       check('refresh shows "Newer saved value: <v> by <who>" beside it', /Newer saved value: \$35,000 · Google 70% by Maria/.test(h2), (h2.match(/Newer saved value[^<]*/) || ['(none)'])[0]);
+    }
+
+    // ---- save flow (spec 21, 22, 43) with a fetch stub for the config endpoint
+    section('bfcm save flow (fetch stub)');
+    {
+      const EP = 'https://script.google.com/macros/s/SIM-TEST/exec';
+      const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+      const answer = o => Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify(o)) });
+      const netErr = () => Promise.reject(new TypeError('Failed to fetch'));
+      // the server's `current` map: the fixture config + log, with overrides {key: [value, value2, who, at]}
+      const cur = over => {
+        const c = {
+          sale_start: ['2026-10-13', '', '', ''], sale_end: ['2026-12-06', '', '', ''],
+          'budget 2026-10': ['32000', '70', 'Mac O\'Neil "Mac"', '2026-10-15T14:00:00.000Z'], 'budget 2026-11': ['60000', '65', '', ''], 'budget 2026-12': ['', '', '', ''],
+          'target google_roas': ['12', '', '', ''], 'target meta_roas': ['12', '', '', ''], 'target mer': ['11.5', '', '<img src=x onerror=alert(1)>', '2026-10-16T13:30:00.000Z'],
+        };
+        Object.assign(c, over || {});
+        const out = {};
+        Object.keys(c).forEach(k => { out[k] = { value: c[k][0], value2: c[k][1], who: c[k][2], at: c[k][3] }; });
+        return out;
+      };
+      const SAVED_AT = '2026-10-17T12:00:01.000Z';   // 8:00 am Toronto
+      const okBudget = (who, extra) => answer(Object.assign({ ok: true, current: cur({ 'budget 2026-10': ['45000', '60', who || 'Glen', SAVED_AT] }) }, extra || {}));
+      const meta = t => String((t.els['bf-budget-meta'] && t.els['bf-budget-meta'].innerHTML) || '');
+      const tmeta = t => String((t.els['bf-targets-meta'] && t.els['bf-targets-meta'].innerHTML) || '');
+      const fire = (t, ev, target) => (t.els.content._listeners[ev] || []).forEach(fn => fn({ target }));
+      const typeName = (t, name) => fire(t, 'input', { getAttribute: k => (k === 'data-bf' ? 'who' : null), value: name });
+      const clickSave = (t, scope) => fire(t, 'click', { closest: () => ({ getAttribute: k => (k === 'data-bf' ? 'save' : k === 'data-v' ? scope : null) }) });
+      const bodyOf = (posts, i) => { try { return JSON.parse(posts[i].init.body); } catch (e) { return {}; } };
+      const saveBtn = s => (String(s).match(/<button[^>]*data-bf="save"[^>]*>[^<]*<\/button>/g) || []);
+      const boot = o => bootBfcm(Object.assign({ now: '2026-10-17T12:00:00.000Z', configWrites: true, endpoint: EP }, o || {}));
+      // edit the October budget, type a name, click Save; returns after the stub's answers have been handled
+      const saveBudget = async (b, name) => { b.V.edit('budget 2026-10', 45000, 60); typeName(b.t, name == null ? 'Glen' : name); clickSave(b.t, 'budget'); await flush(); };
+
+      {
+        // shipped: endpointUrl '' -> the button says so, is disabled, and nothing is ever posted
+        const b = await bootBfcm({ now: '2026-10-17T12:00:00.000Z', configWrites: true });
+        b.V.edit('budget 2026-10', 45000, 60);
+        const btn = saveBtn(meta(b.t)).concat(saveBtn(b.html()));
+        check('endpointUrl empty: Save button disabled with "Saving is not switched on yet", no name box',
+          btn.length >= 1 && btn.every(x => /disabled/.test(x) && />Saving is not switched on yet</.test(x)) && !/Save for everyone/.test(meta(b.t) + b.html()) && !/data-bf="who"/.test(b.html()), btn.join(' | '));
+        typeName(b.t, 'Glen'); clickSave(b.t, 'budget'); await flush();
+        const r = typeof b.V.save === 'function' ? await b.V.save('budget') : 'no save()';
+        check('endpointUrl empty: a click or save() posts nothing', b.posts.length === 0 && r === false, String(r));
+      }
+      {
+        // ok: one POST, the exact body and transport, "Saved for everyone", the page adopts `current`
+        const b = await boot({ post: () => okBudget('Glen') });
+        b.V.edit('budget 2026-10', 45000, 60);
+        check('with an endpoint and an unsaved edit: "Save for everyone" enabled, name box shown', saveBtn(meta(b.t)).some(x => !/disabled/.test(x) && />Save for everyone</.test(x)) && /data-bf="who"/.test(b.html()));
+        typeName(b.t, 'Glen'); clickSave(b.t, 'budget'); await flush();
+        const p = b.posts[0] || { init: {} }, bd = bodyOf(b.posts, 0), h = b.html();
+        check('ok: exactly one POST to the endpoint, text/plain (no preflight), a 15 s timeout signal',
+          b.posts.length === 1 && p.url === EP && p.init.method === 'POST' && p.init.headers && p.init.headers['Content-Type'] === 'text/plain;charset=utf-8' && p.init.signal && p.init.signal.simTimeoutMs === 15000, JSON.stringify(p.init));
+        check('ok: body is {rid, key, value, value2, expect, expect2, who}, all text, expect = the value the edit started from',
+          Object.keys(bd).join() === 'rid,key,value,value2,expect,expect2,who' && UUID.test(bd.rid) && bd.key === 'budget 2026-10' && bd.value === '45000' && bd.value2 === '60' && bd.expect === '32000' && bd.expect2 === '70' && bd.who === 'Glen', JSON.stringify(bd));
+        check('ok: "Saved for everyone · Glen · 17 Oct, 8:00 am Toronto time"', h.includes('Saved for everyone · Glen · 17 Oct, 8:00 am Toronto time'), (h.match(/[^>]*Saved for everyone[^<]*/) || ['(none)'])[0]);
+        check('ok: the page adopts `current` (control 45000 / 60, no Unsaved, pacing on the new budget)',
+          /data-bf="budget-total"[^>]*value="45000"/.test(h) && /data-bf="budget-pct"[^>]*value="60"/.test(h) && !/Unsaved/.test(h) && b.V._state.cfg.budgets['2026-10'].total === 45000 && b.V._state.cfg.budgets['2026-10'].pct === 60 && /% of \$27,000/.test(h));
+        check('ok: the name is remembered in localStorage', b.t.sandbox.localStorage._m.get('apollo-bfcm-who') === 'Glen');
+        check('ok: the Save button is disabled again once nothing is unsaved', saveBtn(meta(b.t)).every(x => /disabled/.test(x)));
+      }
+      {
+        const b = await boot({ post: () => okBudget('Glen', { duplicate: true }) });
+        await saveBudget(b);
+        check('duplicate: same "Saved for everyone" outcome', b.html().includes('Saved for everyone · Glen · 17 Oct, 8:00 am Toronto time') && !/Unsaved/.test(b.html()));
+      }
+      {
+        // changed: "Not saved: ... Nothing changed." and the control reverts to the server's current value
+        const b = await boot({ post: () => answer({ ok: false, error: 'changed', current: cur({ 'budget 2026-10': ['50000', '55', 'Maria', '2026-10-17T11:59:00.000Z'] }) }) });
+        await saveBudget(b);
+        const h = b.html();
+        check('changed: "Not saved: <reason>. Nothing changed."', /Not saved: [^<]+\. Nothing changed\./.test(h) && !/Saved for everyone/.test(h), (h.match(/Not saved[^<]*/) || ['(none)'])[0]);
+        check('changed: the control reverts to `current` (50000 / 55 by Maria), no Unsaved',
+          /data-bf="budget-total"[^>]*value="50000"/.test(h) && /data-bf="budget-pct"[^>]*value="55"/.test(h) && !/Unsaved/.test(h) && /Set by Maria/.test(h));
+      }
+      {
+        // a refresh brings someone else's newer value while the edit is open: the save still expects the value the
+        // edit started from (32000 / 70), so the server answers "changed" instead of silently overwriting Maria
+        const b = await boot({ post: () => answer({ ok: false, error: 'changed', current: cur({ 'budget 2026-10': ['35000', '70', 'Maria', '2026-10-17T12:10:00.000Z'] }) }) });
+        b.V.edit('budget 2026-10', 45000, 60);
+        b.bf.log = b.bf.log.replace(/\n?$/, '\n') + '"3","2026-10-17T12:10:00.000Z","Maria","budget 2026-10","35000","70","c3d4e5f6-0718-4293-a4b5-c6d7e8f90a1b"\n';
+        await b.clock.advance(16 * 60000);
+        typeName(b.t, 'Glen'); clickSave(b.t, 'budget'); await flush();
+        const bd = bodyOf(b.posts, 0);
+        check('newer value loaded mid-edit: expect is still the value the edit started from (32000 / 70)', b.V._state.cfg.budgets['2026-10'] && bd.expect === '32000' && bd.expect2 === '70', JSON.stringify(bd));
+        check('newer value loaded mid-edit: "changed" reverts the control to Maria\'s 35000', /data-bf="budget-total"[^>]*value="35000"/.test(b.html()) && /Set by Maria/.test(b.html()));
+      }
+      {
+        const b = await boot({ post: () => answer({ ok: false, error: 'busy' }) });
+        await saveBudget(b);
+        const h = b.html();
+        check('busy: "Not saved: ... Nothing changed." and the control reverts to the saved value (32000)', /Not saved: [^<]+\. Nothing changed\./.test(h) && /data-bf="budget-total"[^>]*value="32000"/.test(h) && !/Unsaved/.test(h));
+      }
+      {
+        // network error, then the retry is answered: ONE retry, the SAME rid (same body), then Saved
+        const b = await boot({ post: n => (n === 1 ? netErr() : okBudget('Glen', n === 2 ? { duplicate: true } : {})) });
+        await saveBudget(b);
+        const mid = meta(b.t);
+        check('network error: "Save outcome unknown, checking..." and the button is disabled while it checks', mid.includes('Save outcome unknown, checking...') && saveBtn(mid).every(x => /disabled/.test(x)) && !/Nothing changed/.test(mid + b.html()), mid.replace(/<[^>]+>/g, ' ').slice(0, 200));
+        await b.clock.advance(5000);
+        check('network error then retry ok: exactly one retry with the same rid and body', b.posts.length === 2 && b.posts[0].init.body === b.posts[1].init.body && UUID.test(bodyOf(b.posts, 1).rid));
+        check('network error then retry ok: "Saved for everyone"', b.html().includes('Saved for everyone · Glen') && !/Unsaved|Unconfirmed/.test(b.html()));
+      }
+      {
+        // a 15 s timeout counts as no answer (the fetch never settles)
+        const b = await boot({ post: n => (n === 1 ? new Promise(() => {}) : okBudget('Glen')) });
+        await saveBudget(b);
+        check('timeout: still waiting before 15 s, no retry yet', b.posts.length === 1 && /Saving/.test(meta(b.t)));
+        await b.clock.advance(15000);
+        check('timeout: after 15 s "Save outcome unknown, checking..."', meta(b.t).includes('Save outcome unknown, checking...'));
+        await b.clock.advance(5000);
+        check('timeout then retry ok: one retry, same rid, then Saved', b.posts.length === 2 && b.posts[0].init.body === b.posts[1].init.body && b.html().includes('Saved for everyone · Glen'));
+      }
+      {
+        // an answer that is not JSON (Google's error page after a crash) is not a server answer: retry
+        const b = await boot({ post: n => (n === 1 ? Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve('<!DOCTYPE html><html>Error</html>') }) : okBudget('Glen', { duplicate: true })) });
+        await saveBudget(b);
+        await b.clock.advance(5000);
+        check('non-JSON answer: treated as unknown, retried once with the same rid, then Saved', b.posts.length === 2 && b.posts[0].init.body === b.posts[1].init.body && b.html().includes('Saved for everyone'));
+      }
+      {
+        // two failures: "Not confirmed. Reload to see what is saved.", the control marked Unconfirmed, never "Nothing changed"
+        const b = await boot({ post: () => netErr() });
+        await saveBudget(b);
+        await b.clock.advance(5000);
+        await b.clock.advance(5000);
+        const h = b.html() + meta(b.t);
+        check('two failures: exactly 2 POSTs, then "Not confirmed. Reload to see what is saved."', b.posts.length === 2 && h.includes('Not confirmed. Reload to see what is saved.'), String(b.posts.length));
+        check('two failures: the control is marked Unconfirmed and keeps the typed value', /Unconfirmed/.test(h) && /data-bf="budget-total"[^>]*value="45000"/.test(b.html()));
+        check('two failures: never "Nothing changed" and never "Saved"', !/Nothing changed/.test(h) && !/Saved for everyone/.test(h));
+        b.V.edit('budget 2026-10', 46000, 60);
+        check('a new edit after Unconfirmed is plain Unsaved again', /Unsaved/.test(meta(b.t)) && !/Unconfirmed/.test(meta(b.t)));
+      }
+      {
+        // no name: nothing is posted, the person is asked for a name
+        const b = await boot({ post: () => okBudget('Glen') });
+        await saveBudget(b, '   ');
+        check('no name: nothing posted, asks for a name, no "Nothing changed"', b.posts.length === 0 && /Type your name/.test(meta(b.t)) && !/Nothing changed/.test(meta(b.t) + b.html()));
+      }
+      {
+        // the remembered name fills the box by DOM property, never into an attribute; a throwing localStorage is harmless
+        const b = await boot({ storage: makeStorage({ 'apollo-bfcm-who': 'Priya <b>"P"</b>' }), post: () => okBudget('Priya') });
+        check('remembered name: the box is filled by property, the name never appears in the HTML', b.t.els['bf-who'] && b.t.els['bf-who'].value === 'Priya <b>"P"</b>' && !/Priya/.test(b.html()));
+        b.V.edit('budget 2026-10', 45000, 60); clickSave(b.t, 'budget'); await flush();
+        check('remembered name: used for the save', bodyOf(b.posts, 0).who === 'Priya <b>"P"</b>');
+        const c = await boot({ storage: makeStorage({}, true), post: () => okBudget('Glen') });
+        await saveBudget(c);
+        check('localStorage that throws: the view mounts and the save still works', c.V._state.mounted && c.html().includes('Saved for everyone · Glen'));
+      }
+      {
+        // who and every server string are escaped into text: the server's who, and an invalid reason with markup
+        const b = await boot({ post: () => okBudget('<img src=x onerror=alert(2)>') });
+        await saveBudget(b);
+        const h = b.html();
+        check('XSS: the server\'s who renders as text in "Saved for everyone"', h.includes('Saved for everyone · &lt;img src=x onerror=alert(2)&gt;') && !/<img/i.test(h));
+        const c = await boot({ post: () => answer({ ok: false, error: 'invalid', field: 'value', reason: 'bad <b>value</b> & "more"' }) });
+        await saveBudget(c);
+        const hc = c.html();
+        check('invalid: the server\'s reason is shown escaped: "Not saved: <reason>. Nothing changed."', hc.includes('Not saved: bad &lt;b&gt;value&lt;/b&gt; &amp; &quot;more&quot;. Nothing changed.') && !/<b>value/.test(hc), (hc.match(/Not saved[^<]*/) || ['(none)'])[0]);
+        const d = await boot({ post: () => answer({ ok: false, error: '__proto__' }) });
+        await saveBudget(d);
+        check('an unknown error code reads as a plain refusal', /Not saved: the server refused the change\. Nothing changed\./.test(d.html()));
+      }
+      {
+        // targets: one request per key, each with its own new rid, value2/expect2 empty
+        const srv = {};   // the fake server keeps every accepted row
+        const b = await boot({ post: (n, init) => { const q = JSON.parse(init.body); srv[q.key] = [q.value, '', q.who, SAVED_AT]; return answer({ ok: true, current: cur(srv) }); } });
+        b.V.edit('target mer', 10); b.V.edit('target google_roas', 11);
+        check('targets: the Targets panel has its own enabled Save button', saveBtn(tmeta(b.t)).some(x => !/disabled/.test(x) && />Save for everyone</.test(x)));
+        typeName(b.t, 'Glen'); clickSave(b.t, 'targets'); await flush(); await flush();
+        const k = b.posts.map((p, i) => bodyOf(b.posts, i));
+        check('targets: one POST per key, in panel order, each with a different rid',
+          k.length === 2 && k[0].key === 'target google_roas' && k[1].key === 'target mer' && k[0].rid !== k[1].rid && k.every(x => UUID.test(x.rid) && x.value2 === '' && x.expect2 === ''), JSON.stringify(k));
+        check('targets: expect = the saved values the edits started from (12, 11.5)', k.length === 2 && k[0].value === '11' && k[0].expect === '12' && k[1].value === '10' && k[1].expect === '11.5');
+        check('targets: each target shows its own Saved line', (b.html().match(/Saved for everyone · Glen/g) || []).length >= 2 && b.V._state.cfg.targets.mer === 10 && b.V._state.cfg.targets.google_roas === 11);
+      }
+      {
+        // an incomplete `current` (a broken answer) is never adopted: no budget or target is wiped
+        const b = await boot({ post: () => answer({ ok: true, current: { 'budget 2026-10': { value: '45000', value2: '60', who: 'Glen', at: SAVED_AT } } }) });
+        await saveBudget(b);
+        const c = b.V._state.cfg;
+        check('an incomplete `current` is not adopted (November 60000 and the MER target 11.5 survive)', c.budgets['2026-11'] && c.budgets['2026-11'].total === 60000 && c.targets.mer === 11.5 && !c.error);
+      }
+      {
+        // rid without crypto.randomUUID: still UUID-shaped (the server checks the shape)
+        const b = await boot({ crypto: undefined, post: () => okBudget('Glen') });
+        await saveBudget(b);
+        const c = await boot({ crypto: {}, post: () => okBudget('Glen') });
+        await saveBudget(c);
+        check('no crypto.randomUUID: the rid falls back to a UUID-shaped timestamp + random string', UUID.test(bodyOf(b.posts, 0).rid || '') && UUID.test(bodyOf(c.posts, 0).rid || '') && bodyOf(b.posts, 0).rid !== bodyOf(c.posts, 0).rid);
+      }
+      {
+        // leaving the view mid-save: the late answer never paints or throws
+        const b = await boot({ post: () => new Promise(r => setTimeout(() => r({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify({ ok: true, current: cur() })) }), 0)) });
+        b.V.edit('budget 2026-10', 45000, 60); typeName(b.t, 'Glen'); clickSave(b.t, 'budget');
+        await b.TA.switchChannel('google'); await flush(); await flush();
+        check('leaving mid-save: the weekly view is untouched by the late answer', b.TA.channel === 'google' && !/Saved for everyone/.test(b.html()));
+      }
     }
   }
 

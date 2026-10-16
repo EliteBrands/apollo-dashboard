@@ -189,8 +189,9 @@
   .bf-pre:hover{color:var(--text);background:rgba(148,163,184,.08)}
   .bf-pre[aria-pressed="true"]{color:var(--ink);background:var(--sale);border-color:var(--sale)}
   .bf-datebar label{font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:6px}
-  .bf input[type="date"],.bf input[type="number"]{background:rgba(5,8,22,.6);border:1px solid #4B5563;color:var(--text);border-radius:10px;padding:6px 9px;font-family:var(--mono);font-size:12px;color-scheme:dark;max-width:100%}
-  .bf input[type="number"]{font-size:14px;width:100%;max-width:220px}
+  .bf input[type="date"],.bf input[type="number"],.bf input[type="text"]{background:rgba(5,8,22,.6);border:1px solid #4B5563;color:var(--text);border-radius:10px;padding:6px 9px;font-family:var(--mono);font-size:12px;color-scheme:dark;max-width:100%}
+  .bf input[type="number"],.bf input[type="text"]{font-size:14px;width:100%;max-width:220px}
+  .bf input[type="text"]{font-family:var(--body)}
   .bf input:focus-visible,.bf button:focus-visible,.bf summary:focus-visible{outline:2px solid var(--sale);outline-offset:2px}
   .bf-wl{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--muted)}
   .bf-fresh{font-size:12px;color:var(--muted);margin-top:8px}
@@ -225,6 +226,8 @@
   .bf-newer{font-size:12px;color:var(--sale)}
   .bf-save{font-family:var(--head);font-weight:600;font-size:12.5px;border-radius:999px;padding:7px 16px;border:1px solid var(--sale);background:var(--sale);color:var(--ink);cursor:pointer;align-self:flex-start}
   .bf-save[disabled]{opacity:.45;cursor:not-allowed}
+  .bf-status{font-size:12px;line-height:1.5;color:var(--text)}
+  .bf-st-saved{color:var(--good)} .bf-st-rejected,.bf-st-unconfirmed{color:var(--bad)} .bf-st-checking,.bf-st-needname{color:var(--sale)}
   .bf-range{width:100%;accent-color:var(--sale)}
   .bf-targets summary{cursor:pointer;font-size:12px;color:var(--muted)}
   .bf-trow{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12.5px;margin:6px 0}
@@ -297,7 +300,7 @@
   </footer>
 </div>
 
-<script src="bfcm-core.js?v=4.0.0"></script><script src="bfcm-view.js?v=4.0.0"></script>
+<script src="bfcm-core.js?v=4.0.0"></script><script src="bfcm-view.js?v=4.0.0"></script><script src="bfcm-save.js?v=4.0.0"></script>
 <script>
 const SHEET_ID = '1IqcF3hZNmtBlsffVi7y9jToIVGbHyWsDuT6os5wHAt0';   // config.json dashboard_sheet_id
 const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Sheet1`;   // google (kept for the sim's URL check)
@@ -393,9 +396,10 @@ const CHANNELS = {
     chartTitle: 'Tracked Revenue and Ad Spend · all markets · both channels',
     chartTitleNet: 'Tracked Revenue, Net Sales and Ad Spend · all markets · both channels',
   },
-  // v4 BFCM 2026: day-by-day sale view (bfcm-core.js + bfcm-view.js). enabled = the launch switch (pill + #bfcm deep link);
-  // configWrites shows the budget / target edit controls (Task 11 adds saving via endpointUrl). It hides controls only:
-  // the server's WRITES_ENABLED is the real switch.
+  // v4 BFCM 2026: day-by-day sale view (bfcm-core.js + bfcm-view.js + bfcm-save.js). enabled = the launch switch (pill +
+  // #bfcm deep link); configWrites shows the budget / target edit controls; endpointUrl = the config endpoint's Apps Script
+  // /exec URL (clients/apollo-scooters/apps-script/bfcm-config.gs). While it is '' the Save buttons stay disabled ("Saving
+  // is not switched on yet"). configWrites hides controls only: the server's WRITES_ENABLED is the real switch.
   bfcm: { key:'bfcm', label:'BFCM 2026', enabled:false, configWrites:false, endpointUrl:'',
     dailyCsvUrl: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=BFCM%20Daily`,
     configCsvUrl: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=BFCM%20Config`,

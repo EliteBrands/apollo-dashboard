@@ -2,7 +2,9 @@
    ctx = { CHANNELS, parseCSV, esc, Chart } from index.html. Maths lives in bfcm-core.js (BFCM_CORE); this file is
    DOM, fetch and timers only. Rules: every sheet string (who) goes through ctx.esc into TEXT, never an attribute;
    attributes only ever carry numbers, ISO dates or fixed words. Clock = Date.now() only (never new Date() with no
-   argument) so tools/render-sim.cjs can drive a fake clock. Every time shown is America/Toronto, labelled. */
+   argument) so tools/render-sim.cjs can drive a fake clock. Every time shown is America/Toronto, labelled.
+   Saving (spec 21, 22): the DOM side lives here, the network side (rid, POST, one retry, name storage) in
+   bfcm-save.js (window.BFCM_SAVE). The typed name is set on its input by DOM property, never an attribute. */
 (function (root) {
   'use strict';
   const SOURCES = ['google', 'meta', 'store'];
@@ -70,9 +72,9 @@
   function setHTML(id, html) { const n = document.getElementById(id); if (n) n.innerHTML = html; }
   function listen(target, ev, fn) { if (target && typeof target.addEventListener === 'function') { target.addEventListener(ev, fn); handlers.push([target, ev, fn]); } }
   const isVisible = () => typeof document.visibilityState !== 'string' || document.visibilityState === 'visible';
-  // only a config number/text field being typed in (budget total, a target) holds a background repaint back;
-  // never a slider (forecast or split), a button or a date field, so a touched slider can never freeze the page
-  const CONFIG_FIELDS = { 'budget-total': 1, target: 1 };
+  // only a config number/text field being typed in (budget total, a target, the name) holds a background repaint
+  // back; never a slider (forecast or split), a button or a date field, so a touched slider can never freeze the page
+  const CONFIG_FIELDS = { 'budget-total': 1, target: 1, who: 1 };
   function editing() {
     const a = document.activeElement;
     if (!a || !el || typeof el.contains !== 'function' || !el.contains(a) || a.tagName !== 'INPUT') return false;
@@ -90,6 +92,7 @@
       window: { preset: 'sale', from: null, to: null, label: '' }, custom: null, month: null,
       sliders: neutralSliders(), unsaved: {}, today: torontoToday(), stale: null, staleKey: '', totals: null, forecast: null,
       lastFetchAt: 0, lastOkAt: 0, pendingPaint: false, sig: '', open: null, dataVersion: 0, paintedVersion: 0,
+      saving: {}, who: SAVER() ? SAVER().loadName() : '',
     };
     el.className = '';
     el.innerHTML = '<div class="bf"><div class="loading">Loading the day-by-day sale data…</div></div>';
@@ -212,15 +215,76 @@
     patchForecast(false);
   }
   function resetSliders() { if (!S) return; S.sliders = neutralSliders(); patchForecast(true); }
-  // config edits: only when configWrites is on (Task 11 adds saving); marks the control Unsaved
+  // config edits: only when configWrites is on; marks the control Unsaved (a new edit clears the last save note)
   function edit(key, v, v2) {
     if (!S || !S.mounted || !ctx.CHANNELS.bfcm.configWrites || !S.cfg || S.cfg.error || !editableKey(key)) return false;
+    if (S.saving[key] && !inFlight(key)) delete S.saving[key];
     const prev = S.unsaved[key];
     S.unsaved[key] = { v: numOrNull(v), v2: numOrNull(v2), base: prev ? prev.base : savedSig(key) };
     const u = S.unsaved[key];
     if ((u.v == null ? '' : u.v) + (/^budget/.test(key) ? '|' + (u.v2 == null ? '' : u.v2) : '') === u.base) delete S.unsaved[key];   // typed back to the saved value
-    setHTML('bf-budget-meta', budgetMetaHTML()); setHTML('bf-targets-meta', targetsMetaHTML()); setHTML('bf-pace', paceHTML());
+    patchMeta(); setHTML('bf-pace', paceHTML());
     return true;
+  }
+
+  // ---------------------------------------------------------------- saving (spec 21, 22); the network side is bfcm-save.js
+  const TARGET_KEYS = ['target google_roas', 'target meta_roas', 'target mer'];
+  const SAVER = () => root.BFCM_SAVE || null;
+  const savingOn = () => !!(ctx.CHANNELS.bfcm.endpointUrl && SAVER());
+  const inFlight = k => !!(S.saving[k] && (S.saving[k].state === 'saving' || S.saving[k].state === 'checking'));
+  function patchMeta() { setHTML('bf-budget-meta', budgetMetaHTML()); setHTML('bf-targets-meta', targetsMetaHTML()); }
+  // one person's save: the month's budget (scope 'budget') or every unsaved target (scope 'targets'), one request each
+  function save(scope) {
+    if (!S || !S.mounted || !S.cfg || S.cfg.error || !ctx.CHANNELS.bfcm.configWrites || !savingOn()) return Promise.resolve(false);
+    const keys = (scope === 'targets' ? TARGET_KEYS : ['budget ' + S.month]).filter(k => S.unsaved[k] && !inFlight(k));
+    if (!keys.length) return Promise.resolve(false);
+    const who = String(S.who || '').trim();
+    if (!who) { keys.forEach(k => { S.saving[k] = { state: 'needname', text: 'Type your name in the box above, then save.' }; }); patchMeta(); return Promise.resolve(false); }
+    SAVER().saveName(who);
+    const my = gen;
+    return keys.reduce((p, k) => p.then(() => saveOne(k, who, my)), Promise.resolve()).then(() => true);
+  }
+  function saveOne(key, who, my) {
+    const u = S.unsaved[key], live = () => my === gen && S.mounted;
+    if (!live() || !u) return null;
+    const isB = /^budget /.test(key), base = u.base.split('|'), txt = v => (v == null ? '' : String(v));
+    S.saving[key] = { state: 'saving' }; patchMeta();
+    // expect = the saved value this edit started from, so a change saved meanwhile by someone else is never overwritten
+    return SAVER().saveKey(ctx.CHANNELS.bfcm.endpointUrl, { key, value: txt(u.v), value2: isB ? txt(u.v2) : '', expect: base[0], expect2: isB ? (base[1] || '') : '', who },
+      { onRetry: () => { if (live()) { S.saving[key] = { state: 'checking' }; patchMeta(); } } }).then(r => {
+      if (!live()) return;
+      if (r.state === 'unconfirmed') S.saving[key] = { state: 'unconfirmed' };   // no server answer: the edit stays, marked Unconfirmed
+      else {
+        const o = r.response, cur = o.current && typeof o.current === 'object' ? o.current : null;
+        if (cur) adopt(cur);
+        delete S.unsaved[key];   // saved: the control shows the saved value; refused: it reverts (spec 22)
+        const last = o.ok && cur && cur[key] && typeof cur[key] === 'object' ? cur[key] : {};
+        S.saving[key] = !o.ok ? { state: 'rejected', text: 'Not saved: ' + SAVER().reasonText(o) + '. Nothing changed.' }
+          : { state: 'saved', at: String(last.at || ''), text: 'Saved for everyone · ' + String(last.who || who) + ' · ' + (torontoTime(last.at) || torontoTime(new Date(Date.now()).toISOString())) + ' Toronto time' };
+      }
+      patchMeta(); paint();   // the status shows at once; the full repaint waits while a config field has focus
+    }).catch(() => { if (live()) { S.saving[key] = { state: 'unconfirmed' }; patchMeta(); } });   // never stuck on "Saving…", never "Nothing changed"
+  }
+  // the server's current values, read exactly as a page load reads the two CSV tabs (only a complete map is adopted)
+  function adopt(cur) {
+    const need = C.saleMonths(S.cfg.saleStart, S.cfg.saleEnd).map(m => 'budget ' + m).concat(TARGET_KEYS);
+    if (!need.every(k => cur[k] && typeof cur[k] === 'object')) return;
+    const t = SAVER().currentToCsv(cur, C.CONFIG_HEADERS, C.LOG_HEADERS), r = C.resolveConfig(t.config, t.log, ctx.parseCSV);
+    if (!r.error) { S.cfg = r; S.cfgKept = false; }
+  }
+  const statusText = st => st.state === 'saving' ? 'Saving…' : st.state === 'checking' ? 'Save outcome unknown, checking...' : st.state === 'unconfirmed' ? 'Not confirmed. Reload to see what is saved.' : st.text;
+  // per key: Unsaved / Unconfirmed, else "Set by" (or this person's Saved line while it is the newest), the newer note, the status
+  function keyMeta(key, label) {
+    const u = S.unsaved[key], st = S.saving[key], last = S.cfg.last[key] || {};
+    const fresh = !!st && st.state === 'saved' && String(last.at || '') === st.at;
+    let h = u ? (label ? label + ' ' : '') + '<span class="bf-unsaved">' + (st && st.state === 'unconfirmed' ? 'Unconfirmed' : 'Unsaved') + '</span>' : (fresh || label ? '' : setBy(key));
+    h += newerNote(key);
+    if (st && (st.state !== 'saved' || fresh)) h += '<div class="bf-status bf-st-' + st.state + '" role="status">' + E((label ? label + ': ' : '') + statusText(st)) + '</div>';
+    return h;
+  }
+  function saveBtnHTML(scope, keys) {
+    const on = savingOn(), ready = on && keys.some(k => S.unsaved[k]) && !keys.some(inFlight);
+    return '<button type="button" class="bf-save" data-bf="save" data-v="' + scope + '"' + (ready ? '' : ' disabled') + '>' + (on ? 'Save for everyone' : 'Saving is not switched on yet') + '</button>';
   }
 
   function onClick(e) {
@@ -231,6 +295,7 @@
     else if (a === 'month') setMonth(v);
     else if (a === 'basis') setBasis(v);
     else if (a === 'reset') resetSliders();
+    else if (a === 'save') save(v);
   }
   function onInput(e) {
     const t = e.target;
@@ -241,6 +306,7 @@
       const tot = document.getElementById('bf-budget-total'), pct = document.getElementById('bf-budget-pct');
       edit('budget ' + S.month, tot ? tot.value : null, pct ? pct.value : null);
     } else if (a === 'target') edit(t.getAttribute('data-key'), t.value);
+    else if (a === 'who') S.who = String(t.value || '');
   }
   function onChange(e) {
     const t = e.target;
@@ -280,12 +346,14 @@
     if (S.rows.length) h += dateBarHTML() + budgetHTML() + returnsHTML() + forecastHTML();
     el.className = '';
     el.innerHTML = h + '</div>';
+    const wb = document.getElementById('bf-who');
+    if (wb) wb.value = S.who || '';   // by property: a typed name never goes into an attribute
     if (S.rows.length) { drawChart(); fcLabels(); }
   }
 
   function alertsHTML() {
     let h = '';
-    if (S.pendingPaint && S.dataVersion !== S.paintedVersion) h += '<div class="bf-stale" role="status">Newer figures have loaded. They appear when you finish typing in the budget or target field.</div>';
+    if (S.pendingPaint && S.dataVersion !== S.paintedVersion) h += '<div class="bf-stale" role="status">Newer figures have loaded. They appear when you finish typing in the budget, target or name field.</div>';
     if (S.fetchError === 'load') h += '<div class="bf-alert" role="alert">We could not load the BFCM sale data just now. The page tries again every 15 minutes, or refresh the page.</div>';
     if (S.fetchError === 'refresh') h += '<div class="bf-stale" role="status">The latest refresh did not load, so these figures are from the load at ' + torontoTime(new Date(S.lastOkAt).toISOString()) + ' Toronto time.</div>';
     if (S.dailyError) h += '<div class="bf-alert" role="alert">The day-by-day data feed needs attention, so the figures are hidden rather than risk showing the wrong numbers. Please let your Elite Brands team know.</div>';
@@ -366,6 +434,7 @@
     let h = '<label class="bf-lbl" for="bf-budget-total">' + MONTH[+S.month.slice(5) - 1] + ' budget (CAD) · Google + Meta</label>' +
       '<input id="bf-budget-total" type="number" data-bf="budget-total" value="' + num(b && b.total) + '" min="0" max="500000" step="100" inputmode="numeric">' +
       '<input id="bf-budget-pct" class="bf-range" type="range" data-bf="budget-pct" value="' + (b && fin(b.pct) ? b.pct : 50) + '" min="0" max="100" step="1" aria-label="Google share of the budget, percent">' +
+      (savingOn() ? '<label class="bf-lbl" for="bf-who">Your name (saved with each change)</label><input id="bf-who" type="text" data-bf="who" maxlength="40" autocomplete="name">' : '') +
       '<div id="bf-budget-meta">' + budgetMetaHTML() + '</div>';
     h += '<details class="bf-targets"' + (S.open && S.open.targets ? ' open' : '') + '><summary>Targets</summary>' + [['target google_roas', 'Google ROAS', 'google_roas'], ['target meta_roas', 'Meta ROAS', 'meta_roas'], ['target mer', 'MER', 'mer']].map(k => {
       const u = S.unsaved[k[0]], v = u ? u.v : T[k[2]];
@@ -375,14 +444,13 @@
   }
   function budgetMetaHTML() {
     if (!S.cfg || S.cfg.error) return '';
-    const key = 'budget ' + S.month, b = budgetFor(S.month), u = S.unsaved[key];
-    return splitHTML(b) + (u ? '<span class="bf-unsaved">Unsaved</span>' : setBy(key)) + newerNote(key) +
-      '<button type="button" class="bf-save" data-bf="save" disabled>Save for everyone</button>' +
+    const key = 'budget ' + S.month;
+    return splitHTML(budgetFor(S.month)) + keyMeta(key, '') + saveBtnHTML('budget', [key]) +
       '<div class="bf-note">Saved budgets are shared with everyone who opens this page.</div>';
   }
   function targetsMetaHTML() {
     if (!S.cfg || S.cfg.error) return '';
-    return ['target google_roas', 'target meta_roas', 'target mer'].map(k => (S.unsaved[k] ? '<span class="bf-unsaved">Unsaved</span>' : '') + newerNote(k)).join('');
+    return [['target google_roas', 'Google ROAS'], ['target meta_roas', 'Meta ROAS'], ['target mer', 'MER']].map(k => keyMeta(k[0], k[1])).join('') + saveBtnHTML('targets', TARGET_KEYS);
   }
   const BAND = { under: 'under pace', ok: 'on pace', amber: 'slightly over', red: 'over budget' };
   function paceHTML() {
@@ -602,7 +670,7 @@
   }
 
   const api = {
-    mount, unmount, refresh, edit, setPreset, setCustom, setMonth, setBasis, setSlider, resetSliders,
+    mount, unmount, refresh, edit, save, setPreset, setCustom, setMonth, setBasis, setSlider, resetSliders,
     _state: null,
   };
   root.BFCM_VIEW = api;
