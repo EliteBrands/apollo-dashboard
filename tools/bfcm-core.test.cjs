@@ -287,3 +287,94 @@ test('lag tags: Google <= 2 days, Meta <= 7 days, none for the store', () => {
   assert.equal(C.lagTag('meta', '2026-10-08', t), null);                // age 8
   assert.equal(C.lagTag('store', '2026-10-16', t), null);
 });
+
+// ---- Task 9: forecast engine
+const FC_CFG = { saleStart: '2026-10-13', saleEnd: '2026-12-06', month: '2026-10', targets: { google_roas: 12, meta_roas: 12, mer: 12 } };
+const fcRows = parse(flat('2026-10-13', '2026-10-19', [1000, 10000, 10], [500, 3000, 5], [12000, 9])).rows;   // 7 days, through 19 Oct
+// remaining = 20 Oct .. 6 Dec = 48 days
+const fcVarRows = parse(range('2026-10-13', '2026-10-19').map((d, i) => day(d, [1000, 10000, 10], [500, 3000, 5], [[8200, 9300, 13100, 15400, 7700, 16900, 11250][i], 9]))).rows;
+
+test('mulberry32: deterministic, in [0,1), differs by seed', () => {
+  const a = C.mulberry32(5), b = C.mulberry32(5), c = C.mulberry32(6);
+  const xs = [a(), a(), a()], ys = [b(), b(), b()];
+  assert.deepEqual(xs, ys);
+  xs.forEach(v => assert.ok(v >= 0 && v < 1));
+  assert.notEqual(c(), xs[0]);
+});
+
+test('forecast neutral sliders reproduce the 7-day run-rate exactly', () => {
+  const f = C.forecast(fcRows, FC_CFG, {});
+  assert.equal(f.throughDate, '2026-10-19');
+  assert.equal(f.basis.from, '2026-10-13');
+  assert.equal(f.basis.to, '2026-10-19');
+  assert.equal(f.basis.label, 'last 7 days, 13 Oct to 19 Oct');
+  assert.equal(f.platformRevenue.google, 70000 + 10000 * 48);
+  assert.equal(f.platformRevenue.meta, 21000 + 3000 * 48);
+  assert.equal(f.storeRevenue.point, 84000 + 12000 * 48);
+  assert.equal(f.spendCeiling, 1000);
+  // sale MER = store / (realised spend + projected spend)
+  assert.equal(f.saleMer.point, (84000 + 12000 * 48) / (10500 + 1500 * 48));
+  // Oct: spent 13..19 (7 x 1500) + 12 days left x 1500
+  assert.equal(f.monthSpend.google, 7000 + 1000 * 12);
+  assert.equal(f.monthSpend.meta, 3500 + 500 * 12);
+  assert.equal(f.monthSpend.total, f.monthSpend.google + f.monthSpend.meta);
+});
+
+test('forecast: same seed identical, other seed moves p10/p90 not point', () => {
+  const a = C.forecast(fcVarRows, FC_CFG, {}, 7), b = C.forecast(fcVarRows, FC_CFG, {}, 7), c = C.forecast(fcVarRows, FC_CFG, {}, 8);
+  assert.deepEqual(a.storeRevenue, b.storeRevenue);
+  assert.equal(a.storeRevenue.point, c.storeRevenue.point);
+  assert.ok(a.storeRevenue.p10 !== c.storeRevenue.p10 || a.storeRevenue.p90 !== c.storeRevenue.p90);
+  assert.ok(a.storeRevenue.p10 < a.storeRevenue.point && a.storeRevenue.p90 > a.storeRevenue.point);
+  assert.ok(a.saleMer.p10 < a.saleMer.p90);
+});
+
+test('forecast clamps sliders: spend.google 5 -> 1.0, roas 9 -> 1.5, spend -3 -> -0.5', () => {
+  const hi = C.forecast(fcRows, FC_CFG, { spend: { google: 5 } });
+  const one = C.forecast(fcRows, FC_CFG, { spend: { google: 1.0 } });
+  assert.deepEqual(hi, one);
+  const lo = C.forecast(fcRows, FC_CFG, { spend: { meta: -3 } });
+  assert.equal(C.forecast(fcRows, FC_CFG, { spend: { meta: -0.5 } }).monthSpend.meta, lo.monthSpend.meta);
+  assert.equal(lo.monthSpend.meta, 3500 + 250 * 12);
+  const r = C.forecast(fcRows, FC_CFG, { roas: { google: 9 } });
+  assert.equal(r.platformRevenue.google, 70000 + 1000 * 10 * 1.5 * 48);
+  assert.equal(C.forecast(fcRows, FC_CFG, { roas: { google: 0.1 } }).platformRevenue.google, 70000 + 1000 * 10 * 0.5 * 48);
+});
+
+test('forecast REVIEW FOCUS 3: Meta spend 0 on every basis day', () => {
+  const r = parse(flat('2026-10-13', '2026-10-19', [1000, 10000, 10], [0, 0, 0], [12000, 9])).rows;
+  const f = C.forecast(r, FC_CFG, {});
+  assert.equal(f.platformRevenue.meta, null);
+  assert.ok(Number.isFinite(f.storeRevenue.point));
+  assert.ok(f.storeRevenue.point > 84000);
+  assert.equal(f.storeRevenue.point, 84000 + 12000 * 48);   // baseMer 12 x google 1000 x m 1
+});
+
+test('forecast: basis windows, young sale, and not-enough-data', () => {
+  const long = parse(flat('2026-10-13', '2026-10-30', [1000, 10000, 10], [500, 3000, 5], [12000, 9])).rows;
+  const l7 = C.forecast(long, FC_CFG, { basis: 'last7' }), l14 = C.forecast(long, FC_CFG, { basis: 'last14' }), s = C.forecast(long, FC_CFG, { basis: 'sale' });
+  assert.equal(l7.basis.from, '2026-10-24');
+  assert.equal(l14.basis.from, '2026-10-17');
+  assert.equal(s.basis.from, '2026-10-13');
+  const young = C.forecast(fcRows, FC_CFG, { basis: 'last14' });
+  assert.equal(young.basis.from, '2026-10-13');
+  const none = C.forecast([], FC_CFG, {});
+  assert.equal(none.throughDate, null);
+  assert.equal(none.storeRevenue.point, null);
+  assert.equal(none.spendCeiling, null);
+  assert.equal(none.platformRevenue.google, null);
+  assert.match(none.basis.label, /Not enough data yet/);
+  const noStore = parse(flat('2026-10-13', '2026-10-19', [1000, 10000, 10], [500, 3000, 5], [])).rows;
+  assert.equal(C.forecast(noStore, FC_CFG, {}).storeRevenue.point, null);
+});
+
+test('forecast: no NaN or Infinity anywhere, month not started', () => {
+  const z = parse(flat('2026-10-13', '2026-10-19', [0, 0, 0], [0, 0, 0], [0, 0])).rows;
+  const f = C.forecast(z, FC_CFG, {});
+  assert.doesNotMatch(JSON.stringify(f).replace(/null/g, ''), /NaN|Infinity/);
+  (function walk(o) { Object.keys(o).forEach(k => { const v = o[k]; if (typeof v === 'number') assert.ok(Number.isFinite(v), k); else if (v && typeof v === 'object') walk(v); }); })(f);
+  const nov = C.forecast(fcRows, Object.assign({}, FC_CFG, { month: '2026-11' }), {});
+  assert.equal(nov.monthSpend.google, 1000 * 30);
+  const dec = C.forecast(fcRows, Object.assign({}, FC_CFG, { month: '2026-12' }), {});
+  assert.equal(dec.monthSpend.google, 1000 * 6);
+});
