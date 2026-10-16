@@ -22,6 +22,10 @@
  * folder, so RENDER_SIM_PAGE can point at a mutated copy with mutated scripts beside it) in the same
  * vm context BEFORE the inline script, mirroring the browser. BFCM sections run on a fake clock.
  */
+// Pin the machine's local zone BEFORE any Date use: the page must work in Toronto days whatever zone the
+// viewer's machine is in, and a "local date instead of Toronto date" bug only shows when the two differ.
+// Brisbane is never the Toronto date at the BFCM test instants, so that bug is caught on every machine.
+process.env.TZ = 'Australia/Brisbane';
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -878,7 +882,13 @@ async function main() {
       const gSpent = bfSum('2026-10-01', '2026-10-16', 1), gAvg7 = bfSum('2026-10-10', '2026-10-16', 1) / 7, gLands = gSpent + gAvg7 * 15;
       check('Google pacing bar: lands at = spent (1..16 Oct) + last-7 avg x 15 days (independent), % of $22,400',
         h.includes(i$(gLands)) && h.includes(Math.round(gLands / 22400 * 100) + '% of'), `want ${i$(gLands)} (${Math.round(gLands / 22400 * 100)}%)`);
-      check('Meta pacing bar stops at its complete-through day and names the gap', /to 13 Oct/.test(h) && (h.match(/missing 14 Oct/g) || []).length >= 2);
+      // the Meta bar's OWN text only (between id="bf-pace" and the Returns band), never the tiles or the forecast
+      const pace = h.indexOf('id="bf-pace"') >= 0 ? h.slice(h.indexOf('id="bf-pace"'), h.indexOf('2 · Returns')) : '';
+      const metaBar = pace.split('<div class="bf-bar">').find(s => s.includes('<i class="bf-sw m"></i>Meta</span>')) || '';
+      const mSpent = bfSum('2026-10-01', '2026-10-13', 4), mLands = mSpent + bfSum('2026-10-07', '2026-10-13', 4) / 7 * 18;
+      check('Meta pacing bar (its own text): spent 1..13 Oct, "to 13 Oct", "missing 14 Oct", lands at = spent + last-7 avg x 18 days (independent)',
+        !!metaBar && metaBar.includes(i$(mSpent) + ' spent') && /to 13 Oct/.test(metaBar) && /missing 14 Oct/.test(metaBar) && metaBar.includes('lands at <b class="bf-') && metaBar.includes(i$(mLands)),
+        `want ${i$(mSpent)} spent, lands ${i$(mLands)}; bar: ${metaBar.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 220)}`);
       check('edit() is refused while configWrites:false', V.edit('budget 2026-10', 1, 50) === false && Object.keys(S.unsaved).length === 0);
       V.setMonth('2026-12');
       const hd = html();
@@ -932,6 +942,10 @@ async function main() {
       const { V, html } = await bootBfcm({ bf: { config: '<html>not a csv</html>' } });
       const h = html();
       check('config read fails: "Budget settings could not be read", data bands still work, no % of budget', /Budget settings could not be read/.test(h) && /x$/.test(tileOf(h, 'google').v) && !/% of \$/.test(h) && V._state.rows.length === 16);
+      // unknown is not blank: an unreadable config must never say "No budget set" (pacing bars, forecast, future month)
+      check('config read fails: says "Budget unavailable", never "No budget set" (pacing + forecast)', /Budget unavailable/.test(h) && /budget unavailable/.test(h) && !/no budget set/i.test(h), (h.match(/[^>]{0,40}[Nn]o budget set[^<]{0,20}/g) || []).join(' | '));
+      V.setMonth('2026-12');
+      check('config read fails: a future month says "Budget unavailable", not "No budget set yet"', /Starts 1 Dec\. Budget unavailable/.test(html()) && !/no budget set/i.test(html()), (html().match(/Starts 1 Dec[^<]*/) || [''])[0]);
     }
     {
       const { html } = await bootBfcm({ bf: { log: '<html>not a csv</html>' } });
@@ -977,7 +991,7 @@ async function main() {
       // focusout); a user's own action (a picked date fires "change" while its input still has focus) paints at once
       const { t, V, clock, bf, html } = await bootBfcm({ now: '2026-10-17T12:00:00.000Z' });
       t.els.content.contains = () => true;
-      t.documentStub.activeElement = { tagName: 'INPUT' };
+      t.documentStub.activeElement = { tagName: 'INPUT', type: 'number', getAttribute: k => (k === 'data-bf' ? 'budget-total' : null) };   // a config number input being typed in
       const before = html();
       bf.log = bf.log.replace(/\n?$/, '\n') + '"3","2026-10-17T12:10:00.000Z","Maria","budget 2026-10","35000","70","c3d4e5f6-0718-4293-a4b5-c6d7e8f90a1b"\n';
       await clock.advance(16 * 60000);
@@ -986,6 +1000,45 @@ async function main() {
       check('a user date pick paints at once, focused input or not', /2 to 9 Oct/.test(html()) && V._state.pendingPaint === false && /\$35,000/.test(html()));
       V.setSlider('spend.google', 0.2);
       t.documentStub.activeElement = null;
+    }
+    {
+      // a focused FORECAST SLIDER never holds back a refresh or a stale banner (a client drags it, leaves the tab, returns hours later)
+      const { t, clock, bf, html } = await bootBfcm({ now: '2026-10-17T12:00:00.000Z' });
+      t.els.content.contains = () => true;
+      t.documentStub.activeElement = { tagName: 'INPUT', type: 'range', getAttribute: k => (k === 'data-bf' ? 'slider' : null) };
+      bf.daily = bf.daily.replace('"2026-10-16","876.00"', '"2026-10-16","999.00"');
+      await clock.advance(4.5 * 3600000);   // several refreshes, and past 16:05Z when Meta turns 30 h old
+      const h = html();
+      check('focused forecast slider: the refresh still paints the new data', h.includes('$999'));
+      check('focused forecast slider: the stale banner still appears past 30 h', /Meta data last updated 16 Oct, 6:05 am Toronto time/.test(h));
+      t.documentStub.activeElement = null;
+    }
+    {
+      // a focused config number input defers the full repaint, but the alerts + freshness area is always repainted
+      const { t, V, clock, bf, html } = await bootBfcm({ now: '2026-10-17T12:00:00.000Z', configWrites: true });
+      t.els.content.contains = () => true;
+      t.documentStub.activeElement = { tagName: 'INPUT', type: 'number', getAttribute: k => (k === 'data-bf' ? 'budget-total' : null) };
+      const before = html();
+      bf.daily = bf.daily.split('2026-10-17T10:00:00.000Z').join('2026-10-17T14:00:00.000Z');   // a newer Google pull (10:00 am Toronto)
+      await clock.advance(4.5 * 3600000);
+      const al = String((t.els['bf-alerts'] && t.els['bf-alerts'].innerHTML) || ''), fr = String((t.els['bf-fresh'] && t.els['bf-fresh'].innerHTML) || '');
+      check('focused budget input: the full repaint waits (the control is kept)', html() === before && V._state.pendingPaint === true);
+      check('focused budget input: the alerts area still gets the stale banner', /Meta data last updated 16 Oct, 6:05 am Toronto time/.test(al), al.slice(0, 160));
+      check('focused budget input: the freshness line still gets the new pull time', /Google 17 Oct, 10:00 am/.test(fr), fr.slice(0, 160));
+      t.documentStub.activeElement = null;
+    }
+    {
+      // weekly table: when only Meta ends early (no gap), Total spend / store sales / MER are cut to 15 Oct, and the row says so
+      const recs = indieRows(BFX.daily);
+      const r13 = recs.find(r => r[0] === '2026-10-13'), r14 = recs.find(r => r[0] === '2026-10-14');
+      [4, 5, 6].forEach(c => { r14[c] = r13[c]; });   // fill the 14 Oct Meta gap
+      const noGap = recs.map(r => r.map(x => '"' + String(x).replace(/"/g, '""') + '"').join(',')).join('\n');
+      const { html } = await bootBfcm({ bf: { daily: noGap } });
+      const row = (html().match(/<tr><td>13 to 16 Oct \(this week\)[\s\S]*?<\/tr>/) || [''])[0];
+      const tds = [...row.matchAll(/<td>([\s\S]*?)<\/td>/g)].map(m => m[1]);
+      const st15 = bfSum('2026-10-13', '2026-10-15', 13);
+      check('weekly row: store sales summed to 15 Oct (independent)', tds[4] === i$(st15), `${tds[4]} vs ${i$(st15)}`);
+      check('weekly row: names the cut-off "Total, store sales and MER to 15 Oct"', /Total, store sales and MER to 15 Oct/.test(tds[0] || ''), (tds[0] || '(row missing)').replace(/<[^>]+>/g, ' '));
     }
     {
       // slider / basis actions before the first load are ignored, never a crash

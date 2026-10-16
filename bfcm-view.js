@@ -70,9 +70,14 @@
   function setHTML(id, html) { const n = document.getElementById(id); if (n) n.innerHTML = html; }
   function listen(target, ev, fn) { if (target && typeof target.addEventListener === 'function') { target.addEventListener(ev, fn); handlers.push([target, ev, fn]); } }
   const isVisible = () => typeof document.visibilityState !== 'string' || document.visibilityState === 'visible';
+  // only a config number/text field being typed in (budget total, a target) holds a background repaint back;
+  // never a slider (forecast or split), a button or a date field, so a touched slider can never freeze the page
+  const CONFIG_FIELDS = { 'budget-total': 1, target: 1 };
   function editing() {
     const a = document.activeElement;
-    return !!(a && el && typeof el.contains === 'function' && el.contains(a) && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName || ''));
+    if (!a || !el || typeof el.contains !== 'function' || !el.contains(a) || a.tagName !== 'INPUT') return false;
+    const type = String(a.type || '').toLowerCase();
+    return (type === 'number' || type === 'text') && typeof a.getAttribute === 'function' && !!CONFIG_FIELDS[a.getAttribute('data-bf')];
   }
 
   // ---------------------------------------------------------------- lifecycle
@@ -84,7 +89,7 @@
       mounted: true, loaded: false, rows: [], cfg: null, dailyError: null, fetchError: null, cfgKept: false,
       window: { preset: 'sale', from: null, to: null, label: '' }, custom: null, month: null,
       sliders: neutralSliders(), unsaved: {}, today: torontoToday(), stale: null, staleKey: '', totals: null, forecast: null,
-      lastFetchAt: 0, lastOkAt: 0, pendingPaint: false, sig: '', open: null,
+      lastFetchAt: 0, lastOkAt: 0, pendingPaint: false, sig: '', open: null, dataVersion: 0, paintedVersion: 0,
     };
     el.className = '';
     el.innerHTML = '<div class="bf"><div class="loading">Loading the day-by-day sale data…</div></div>';
@@ -135,6 +140,7 @@
     if ((c.err === 'net' || l.err === 'net') && S.cfg && !S.cfg.error) { S.cfgKept = true; }
     else { S.cfg = C.resolveConfig(c.text || '', l.text || '', ctx.parseCSV); S.cfgKept = false; }
     S.loaded = true;
+    S.dataVersion++;
   }
   function tick() {
     if (!S || !S.mounted || !S.loaded) return;
@@ -250,8 +256,18 @@
   // ---------------------------------------------------------------- render
   function paint(userAction) {
     if (!S || !S.mounted || !S.loaded) return;
-    if (!userAction && editing()) { S.pendingPaint = true; return; }   // a background repaint never yanks a control out from under the cursor
+    if (!userAction && editing()) {
+      // a background repaint never yanks a field out from under the typist, but the alerts and the freshness
+      // line are always current (stale banners never wait for focus to leave)
+      S.pendingPaint = true;
+      S.stale = S.rows.length ? C.staleness(S.rows, new Date(Date.now())) : null;
+      S.staleKey = staleKeyOf(S.stale);
+      setHTML('bf-alerts', alertsHTML());
+      if (S.rows.length) setHTML('bf-fresh', freshHTML());
+      return;
+    }
     S.pendingPaint = false;
+    S.paintedVersion = S.dataVersion;
     const isOpen = sel => { const n = typeof el.querySelector === 'function' ? el.querySelector(sel) : null; return !!(n && n.open); };
     S.open = { days: isOpen('.bf-days'), targets: isOpen('.bf-targets') };   // a repaint keeps open panels open
     destroyCharts();
@@ -260,7 +276,7 @@
     S.staleKey = staleKeyOf(S.stale);
     if (!S.month) S.month = defaultMonth();
     computeWindow();
-    let h = '<div class="bf">' + alertsHTML() + phaseHTML();
+    let h = '<div class="bf"><div id="bf-alerts" class="bf-alerts">' + alertsHTML() + '</div>' + phaseHTML();
     if (S.rows.length) h += dateBarHTML() + budgetHTML() + returnsHTML() + forecastHTML();
     el.className = '';
     el.innerHTML = h + '</div>';
@@ -269,6 +285,7 @@
 
   function alertsHTML() {
     let h = '';
+    if (S.pendingPaint && S.dataVersion !== S.paintedVersion) h += '<div class="bf-stale" role="status">Newer figures have loaded. They appear when you finish typing in the budget or target field.</div>';
     if (S.fetchError === 'load') h += '<div class="bf-alert" role="alert">We could not load the BFCM sale data just now. The page tries again every 15 minutes, or refresh the page.</div>';
     if (S.fetchError === 'refresh') h += '<div class="bf-stale" role="status">The latest refresh did not load, so these figures are from the load at ' + torontoTime(new Date(S.lastOkAt).toISOString()) + ' Toronto time.</div>';
     if (S.dailyError) h += '<div class="bf-alert" role="alert">The day-by-day data feed needs attention, so the figures are hidden rather than risk showing the wrong numbers. Please let your Elite Brands team know.</div>';
@@ -296,14 +313,16 @@
     const btn = p => '<button type="button" class="bf-pre" data-bf="preset" data-v="' + p[0] + '" aria-pressed="' + (w.preset === p[0]) + '">' + p[1] + '</button>';
     const presets = PRESETS.filter(p => !PRESET_MONTH[p[0]] || ms.indexOf(PRESET_MONTH[p[0]]) >= 0).map(btn).join('');
     const first = S.rows[0].date, last = S.rows[S.rows.length - 1].date, n = C.daysBetween(w.from, w.to) + 1;
-    const fresh = SOURCES.map(s => { const o = S.stale[s]; return TITLE[s] + ' ' + (o.newest ? torontoTime(o.newest) : 'not loaded'); }).join(' · ');
     return '<div><div class="bf-datebar" role="group" aria-label="Date range">' + presets +
       '<label>From <input type="date" id="bf-from" data-bf="from" value="' + w.from + '" min="' + first + '" max="' + last + '"></label>' +
       '<label>To <input type="date" id="bf-to" data-bf="to" value="' + w.to + '" min="' + first + '" max="' + last + '"></label>' +
       '<span class="bf-wl">' + drange(w.from, w.to) + ' · ' + n + (n === 1 ? ' day' : ' days') + '</span></div>' +
       (w.from > last ? '<div class="bf-note">No days of data in this range yet.</div>' : '') +
-      '<div class="bf-fresh">Data updated ' + fresh + ' (Toronto time). Refreshes every 15 minutes while this page is open.' +
-      (S.cfgKept ? ' Budget settings are from the previous load.' : '') + '</div></div>';
+      '<div class="bf-fresh" id="bf-fresh">' + freshHTML() + '</div></div>';
+  }
+  function freshHTML() {
+    const fresh = SOURCES.map(s => { const o = S.stale[s]; return TITLE[s] + ' ' + (o.newest ? torontoTime(o.newest) : 'not loaded'); }).join(' · ');
+    return 'Data updated ' + fresh + ' (Toronto time). Refreshes every 15 minutes while this page is open.' + (S.cfgKept ? ' Budget settings are from the previous load.' : '');
   }
 
   // ---- band 1: budget + pacing
@@ -369,7 +388,8 @@
   function paceHTML() {
     const month = S.month, mStart = month + '-01', end = minD(C.addDays(C.addDays(mStart, 40).slice(0, 7) + '-01', -1), S.cfg.saleEnd);
     const p = C.pacing(S.rows, month, budgetFor(month), S.cfg.saleEnd, S.today);
-    if (p.status === 'not-started') return '<div class="bf-note bf-starts">Starts ' + dshort(mStart) + '.' + (budgetFor(month) ? '' : ' No budget set yet.') + '</div>';
+    // unknown is never shown as blank: an unreadable config says "Budget unavailable", only a blank cell says "No budget set"
+    if (p.status === 'not-started') return '<div class="bf-note bf-starts">Starts ' + dshort(mStart) + '.' + (S.cfg.error ? ' Budget unavailable.' : budgetFor(month) ? '' : ' No budget set yet.') + '</div>';
     const gaps = src => C.completeThrough(S.rows, src, mStart, end).gaps;
     return [['google', 'Google', ['google']], ['meta', 'Meta', ['meta']], ['total', 'Both', ['google', 'meta']]].map(r => {
       const b = p[r[0]], g = r[0] === 'total' ? gaps('google').concat(gaps('meta')).sort().filter((d, i, a) => a.indexOf(d) === i) : gaps(r[0]);
@@ -378,7 +398,7 @@
       const lands = b.landsAt == null ? 'lands at -' : 'lands at <b class="bf-' + b.band + '">' + m$(b.landsAt) +
         (b.pct == null ? '' : ' (' + Math.round(b.pct) + '% of ' + m$(b.budget) + ') · ' + BAND[b.band]) + '</b>';
       return '<div class="bf-bar"><div class="bf-bh"><span class="bf-bn">' + (r[0] === 'total' ? '<i class="bf-sw g"></i><i class="bf-sw m"></i>' : '<i class="bf-sw ' + r[0].charAt(0) + '"></i>') + r[1] + '</span>' +
-        '<span class="bf-bv">' + m$(b.spent) + ' spent' + (b.budget == null ? (b.landsAt == null ? '' : ' · No budget set') : ' of ' + m$(b.budget)) + '</span></div>' +
+        '<span class="bf-bv">' + m$(b.spent) + ' spent' + (b.budget == null ? (b.landsAt == null ? '' : ' · ' + (S.cfg.error ? 'Budget unavailable' : 'No budget set')) : ' of ' + m$(b.budget)) + '</span></div>' +
         '<div class="bf-track"><div class="bf-fill ' + r[0] + '" style="width:' + pctOf(b.spent, scale).toFixed(1) + '%"></div>' +
         (b.budget ? '<div class="bf-budgetline" style="left:' + pctOf(b.budget, scale).toFixed(1) + '%"></div>' : '') +
         (b.landsAt != null ? '<div class="bf-proj" style="width:' + pctOf(b.landsAt, scale).toFixed(1) + '%"></div>' : '') + '</div>' +
@@ -503,7 +523,9 @@
     const w = S.window, rows = [];
     for (let ws = weekStart(w.from); ws <= w.to; ws = C.addDays(ws, 7)) {
       const a = maxD(ws, w.from), b = minD(C.addDays(ws, 6), w.to), cur = ws === weekStart(S.today), al = aligned(a, b), wt = al.wt;
-      const note = join([srcNote(wt.google, b, 'Google'), srcNote(wt.meta, b, 'Meta'), srcNote(wt.store, b, 'Store')]);
+      // the Total / store sales / MER cells run to the earliest complete day of all three sources: say so when that is short
+      const note = join([srcNote(wt.google, b, 'Google'), srcNote(wt.meta, b, 'Meta'), srcNote(wt.store, b, 'Store'),
+        al.spend != null && al.through && al.through < b ? 'Total, store sales and MER to ' + dshort(al.through) : '']);
       rows.push('<tr><td>' + drange(a, b) + (cur ? ' (this week)' : '') + (note ? '<small>' + note + '</small>' : '') + '</td><td>' + m$(wt.google.spend) + '</td><td>' + m$(wt.meta.spend) + '</td><td>' + m$(al.spend) +
         '</td><td>' + m$(al.revenue) + '</td><td>' + x(wt.google.roas) + '</td><td>' + x(wt.meta.roas) + '</td><td>' + x(wt.mer.value) + '</td></tr>');
       if (cur) {
@@ -570,7 +592,7 @@
     const bwt = C.windowTotals(S.rows, f.basis.from, f.basis.to), n = C.daysBetween(f.basis.from, f.basis.to) + 1;
     const nowDay = (bwt.google.spend == null || bwt.meta.spend == null) ? null : (bwt.google.spend + bwt.meta.spend) / n;
     return '<div class="bf-out">' +
-      ft(mName + ' spend lands at', k$(f.monthSpend.total), join(['Google ' + m$(f.monthSpend.google), 'Meta ' + m$(f.monthSpend.meta), b && fin(b.total) ? 'budget ' + m$(b.total) : 'no budget set', basis, staleNote(['google', 'meta'])])) +
+      ft(mName + ' spend lands at', k$(f.monthSpend.total), join(['Google ' + m$(f.monthSpend.google), 'Meta ' + m$(f.monthSpend.meta), S.cfg.error ? 'budget unavailable' : b && fin(b.total) ? 'budget ' + m$(b.total) : 'no budget set', basis, staleNote(['google', 'meta'])])) +
       ft('Store revenue lands at', k$(f.storeRevenue.point), join(['whole sale to ' + dshort(cfg.saleEnd), fin(f.storeRevenue.p10) ? 'likely range ' + k$(f.storeRevenue.p10) + ' to ' + k$(f.storeRevenue.p90) : '', basis, staleNote(SOURCES)])) +
       ft('Sale MER lands at', x(f.saleMer.point), join([fin(f.saleMer.p10) ? 'likely range ' + x(f.saleMer.p10) + ' to ' + x(f.saleMer.p90) : '', T ? 'target ' + x(T.mer) : '', basis, staleNote(SOURCES)])) +
       ft('Spend ceiling to hold the MER target', f.spendCeiling == null ? '-' : m$(f.spendCeiling) + '/day', join(['at the current store sales pace', nowDay == null ? '' : 'now ' + m$(nowDay) + '/day', basis, staleNote(SOURCES)])) +
