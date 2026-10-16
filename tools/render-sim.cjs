@@ -74,6 +74,14 @@ function indieRows(csv) {
   });
 }
 
+// the exact `sheet=` tab name of a gviz URL (decoded), or null: routing on the whole parameter, never a substring,
+// so "BFCM Config" never catches "BFCM Config Log" and an extra parameter (headers=1) anywhere changes nothing
+function sheetOf(u) {
+  const m = /[?&]sheet=([^&#]*)/.exec(String(u));
+  if (!m) return null;
+  try { return decodeURIComponent(m[1]); } catch (e) { return m[1]; }
+}
+
 // ---------------------------------------------------------------- page sandbox
 function makeElement(id) {
   const el = {
@@ -189,12 +197,13 @@ function bootPage(csvText, metaCsvText, merCsvText, opts) {
         return opts.post ? opts.post(postLog.length, init) : Promise.reject(new TypeError('Failed to fetch'));
       }
       fetchLog.push(u);
-      // BFCM tabs first; the Log URL contains the Config URL, so it is matched before it
-      const body = u.includes('sheet=BFCM%20Daily') ? bf.daily
-        : u.includes('sheet=BFCM%20Config%20Log') ? bf.log
-        : u.includes('sheet=BFCM%20Config') ? bf.config
+      // BFCM tabs first, routed on the exact tab name (the Log URL contains the Config URL as a substring)
+      const tab = sheetOf(u);
+      const body = tab === 'BFCM Daily' ? bf.daily
+        : tab === 'BFCM Config Log' ? bf.log
+        : tab === 'BFCM Config' ? bf.config
         : null;
-      if (u.includes('sheet=BFCM%20')) {
+      if (tab && /^BFCM /.test(tab)) {
         if (body === 'NETWORK-ERROR') return Promise.reject(new TypeError('Failed to fetch'));
         return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(body == null ? '<html>no bfcm fixture</html>' : body) });
       }
@@ -533,7 +542,10 @@ async function main() {
     // holds at boot, then flip it in the sandbox so the view itself can be exercised.
     const shippedOn = A.CHANNELS.mer.enabled === true;   // whichever way the launch switch is set, the pill must MATCH it
     check('shipped flag: mer pill visibility matches CHANNELS.mer.enabled at boot', !!els['ch-mer'] && (shippedOn ? els['ch-mer'].style.display !== 'none' : els['ch-mer'].style.display === 'none'), `enabled=${shippedOn} display=${els['ch-mer'] && els['ch-mer'].style.display}`);
-    check('channel hint matches the number of pills on screen', (shippedOn ? (!!els['channelhint'] && /Three views/.test(els['channelhint'].textContent)) : !(els['channelhint'] && /Three views/.test(els['channelhint'].textContent || ''))), `hint=${els['channelhint'] && els['channelhint'].textContent}`);
+    // the hint counts the pills on screen: four with mer and bfcm both on, three with mer alone, none named otherwise
+    const hintNow = String((els['channelhint'] && els['channelhint'].textContent) || '');
+    const hintWant = shippedOn && A.CHANNELS.bfcm && A.CHANNELS.bfcm.enabled === true ? /^Four views/ : shippedOn ? /^Three views/ : null;
+    check('channel hint matches the number of pills on screen', hintWant ? hintWant.test(hintNow) : !/Three views|Four views/.test(hintNow), `hint=${hintNow}`);
     const before = A.channel;
     await A.switchChannel('mer'); await flush();
     check('shipped flag: switchChannel(mer) is a no-op while disabled (or opens it when enabled)', shippedOn ? A.channel === 'mer' : A.channel === before, `channel=${A.channel}`);
@@ -746,7 +758,7 @@ async function main() {
         const t = bootPage(csv, metaCsv, merCsv, { page }); await flush();
         const TA = t.sandbox.window.__apollo;
         const txt = id => (t.els[id] ? String(t.els[id].textContent) : '');
-        const grab = () => ({ html: t.els.content.innerHTML, chrome: [txt('subline'), txt('footnote'), txt('channelhint'), txt('week-ending'), txt('wcount')].join(' | '),
+        const grab = () => ({ html: t.els.content.innerHTML, chromeParts: [txt('subline'), txt('footnote'), txt('channelhint'), txt('week-ending'), txt('wcount')],
           charts: JSON.stringify(t.createdCharts.filter(c => !c.destroyed).map(c => c.config.data)) });
         const out = { google: grab() };
         await TA.switchChannel('meta'); await flush(); out.meta = grab();
@@ -758,10 +770,15 @@ async function main() {
       // same character, so the browser's DOM is identical; the stub DOM keeps the raw string, so decode first.
       const decode = s => String(s).replace(/&#39;/g, "'").replace(/&quot;/g, '"');
       const firstDiff = (x, y) => { let i = 0; while (i < x.length && x[i] === y[i]) i++; return i >= x.length && i >= y.length ? '' : `at ${i}: v3.3 "${x.slice(Math.max(0, i - 40), i + 40)}" vs v4 "${y.slice(Math.max(0, i - 40), i + 40)}"`; };
+      // with the BFCM launch switch on (and Total MER on) the hint names four views by design; every other piece of chrome
+      // must still match v3.3.0 exactly, and the hint must then be the four-view one
+      const bfOn = A.CHANNELS.bfcm && A.CHANNELS.bfcm.enabled === true && A.CHANNELS.mer.enabled === true;
+      const chromeOf = o => o.chromeParts.map((s, i) => (i === 2 && bfOn ? '(channel hint: four views)' : s)).join(' | ');
       for (const k of ['google', 'meta', 'mer']) {
         const raw = a[k].html === b[k].html;
         check(`${k}: content HTML identical to v3.3.0 (raw ${raw ? 'byte-identical' : 'differs only by esc() quote entities'})`, decode(b[k].html) === a[k].html, firstDiff(a[k].html, decode(b[k].html)));
-        check(`${k}: subline, footnote, channel hint, week ending, window count identical`, a[k].chrome === b[k].chrome, `v3.3 ${a[k].chrome}\n        v4   ${b[k].chrome}`);
+        check(`${k}: subline, footnote, channel hint, week ending, window count identical` + (bfOn ? ' (BFCM on: the hint names four views)' : ''),
+          chromeOf(a[k]) === chromeOf(b[k]) && (!bfOn || /^Four views/.test(b[k].chromeParts[2])), `v3.3 ${a[k].chromeParts.join(' | ')}\n        v4   ${b[k].chromeParts.join(' | ')}`);
         check(`${k}: chart data identical`, a[k].charts === b[k].charts);
       }
     }
@@ -789,13 +806,19 @@ async function main() {
     const m = new RegExp('id="bf-t-' + key + '"[^>]*>\\s*<div class="k">([\\s\\S]*?)</div>\\s*<div class="v">([\\s\\S]*?)</div>\\s*<div class="s">([\\s\\S]*?)</div>').exec(h);
     return m ? { k: m[1], v: m[2], s: m[3] } : { k: '', v: '(tile missing)', s: '' };
   };
+  // flips the launch switch in the inline script before boot; applied only while index.html still ships enabled:false
+  // (once it says enabled:true there is nothing to flip, and the boot already has the switch on)
   const BFCM_ON = ["key:'bfcm', label:'BFCM 2026', enabled:false", "key:'bfcm', label:'BFCM 2026', enabled:true"];
+  const BFCM_ON_PATCH = code.includes(BFCM_ON[0]) ? [BFCM_ON] : [];
+  const EXEC_URL = /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/;
+  const isBfcmFetch = u => /^BFCM /.test(sheetOf(u) || '');
   const bfUrls = log => ({
-    daily: log.filter(u => u.includes('sheet=BFCM%20Daily')).length,
-    config: log.filter(u => u.includes('sheet=BFCM%20Config') && !u.includes('sheet=BFCM%20Config%20Log')).length,
-    log: log.filter(u => u.includes('sheet=BFCM%20Config%20Log')).length,
+    daily: log.filter(u => sheetOf(u) === 'BFCM Daily').length,
+    config: log.filter(u => sheetOf(u) === 'BFCM Config').length,
+    log: log.filter(u => sheetOf(u) === 'BFCM Config Log').length,
   });
-  // boot the page, flip the launch switch in the sandbox (as the mer section does) and open the view
+  // boot the page and set every BFCM switch explicitly in the sandbox (as the mer section does), so the checks below
+  // hold whichever way index.html ships them: configWrites only when asked, endpointUrl only when given; then open the view
   const bootBfcm = async (o) => {
     o = o || {};
     const clock = makeClock(o.now || '2026-10-17T18:00:00.000Z');
@@ -805,38 +828,63 @@ async function main() {
     const t = bootPage(csv, metaCsv, merCsv, bo);
     await flush();
     const TA = t.sandbox.window.__apollo, V = t.sandbox.BFCM_VIEW;
+    TA.CHANNELS.bfcm.configWrites = !!o.configWrites;
+    TA.CHANNELS.bfcm.endpointUrl = o.endpoint || '';
     if (o.open !== false) {
       TA.CHANNELS.bfcm.enabled = true;
-      if (o.configWrites) TA.CHANNELS.bfcm.configWrites = true;
-      if (o.endpoint) TA.CHANNELS.bfcm.endpointUrl = o.endpoint;
       await TA.switchChannel('bfcm'); await flush();
     }
     return { t, TA, V, clock, bf, posts: t.postLog, html: () => String(t.els.content.innerHTML || '') };
   };
+  // the text of one pacing bar (Google / Meta / Both) inside #bf-pace, never the tiles or the forecast
+  const paceBars = h => {
+    const pace = h.indexOf('id="bf-pace"') >= 0 ? h.slice(h.indexOf('id="bf-pace"'), h.indexOf('2 · Returns')) : '';
+    const parts = pace.split('<div class="bf-bar">');
+    const one = mark => parts.find(s => s.includes(mark)) || '';
+    return { g: one('<i class="bf-sw g"></i>Google</span>'), m: one('<i class="bf-sw m"></i>Meta</span>'), t: one('<i class="bf-sw m"></i>Both</span>') };
+  };
+  const plain = s => String(s).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
   if (bfOK) {
-    // ---- shipped state: hidden pill, deep link ignored, no BFCM fetch
+    // ---- the launch switches as shipped: each check follows whichever way its switch is set in index.html
+    //      enabled false -> pill hidden, #bfcm ignored, no BFCM fetch; enabled true -> pill shown, #bfcm opens the view
     {
       const t = bootPage(csv, metaCsv, merCsv, { clock: makeClock('2026-10-17T18:00:00.000Z'), location: { hash: '#bfcm', pathname: '/', search: '' } });
-      await flush();
-      const TA = t.sandbox.window.__apollo, B = TA.CHANNELS.bfcm || {};
-      check('CHANNELS.bfcm ships enabled:false, configWrites:false, endpointUrl empty, refreshMs 900000',
-        B.key === 'bfcm' && B.label === 'BFCM 2026' && B.enabled === false && B.configWrites === false && B.endpointUrl === '' && B.refreshMs === 900000, JSON.stringify({ enabled: B.enabled, configWrites: B.configWrites, refreshMs: B.refreshMs }));
-      check('CHANNELS.bfcm CSV URLs pinned to the three BFCM tabs',
-        /&sheet=BFCM%20Daily$/.test(B.dailyCsvUrl || '') && /&sheet=BFCM%20Config$/.test(B.configCsvUrl || '') && /&sheet=BFCM%20Config%20Log$/.test(B.logCsvUrl || ''));
+      await flush(); await flush();
+      const TA = t.sandbox.window.__apollo, B = TA.CHANNELS.bfcm || {}, on = B.enabled === true;
+      const mounted = () => !!(t.sandbox.BFCM_VIEW && t.sandbox.BFCM_VIEW._state && t.sandbox.BFCM_VIEW._state.mounted);
+      const shipped = JSON.stringify({ enabled: B.enabled, configWrites: B.configWrites, endpointUrl: B.endpointUrl, refreshMs: B.refreshMs });
+      check('CHANNELS.bfcm switches: enabled and configWrites are true/false, endpointUrl is empty or an Apps Script /exec URL, refreshMs 900000',
+        B.key === 'bfcm' && B.label === 'BFCM 2026' && typeof B.enabled === 'boolean' && typeof B.configWrites === 'boolean' &&
+        (B.endpointUrl === '' || EXEC_URL.test(B.endpointUrl || '')) && B.refreshMs === 900000, shipped);
+      // gviz guesses how many rows are headers unless told: headers=1 pins it to the first row on all three tabs
+      const bfTab = (u, tab) => sheetOf(u) === tab && /\/gviz\/tq\?tqx=out:csv&/.test(u || '') && /[?&]headers=1(&|$)/.test(u || '');
+      check('CHANNELS.bfcm CSV URLs pinned to the three BFCM tabs, each with headers=1',
+        bfTab(B.dailyCsvUrl, 'BFCM Daily') && bfTab(B.configCsvUrl, 'BFCM Config') && bfTab(B.logCsvUrl, 'BFCM Config Log'), [B.dailyCsvUrl, B.configCsvUrl, B.logCsvUrl].join(' | '));
+      check('the three weekly-view URLs are unchanged (no headers=1)', [csvUrl, TA.CHANNELS.meta.csvUrl, TA.CHANNELS.mer.csvUrl].every(u => !/headers=/.test(u) && /tqx=out:csv&sheet=[^&]+$/.test(u)));
       check('CHANNELS.bfcm subline copy', B.subline === 'Prepared by Elite Brands · BFCM 2026 · All figures CAD · Toronto days', B.subline);
-      check('pill #ch-bfcm hidden while enabled:false', !!t.els['ch-bfcm'] && t.els['ch-bfcm'].style.display === 'none');
-      check('#bfcm deep link ignored while enabled:false (google stays, no BFCM fetch, view not mounted)',
-        TA.channel === 'google' && !t.fetchLog.some(u => u.includes('sheet=BFCM%20')) && !(t.sandbox.BFCM_VIEW && t.sandbox.BFCM_VIEW._state && t.sandbox.BFCM_VIEW._state.mounted), `channel=${TA.channel}`);
+      check('pill #ch-bfcm visibility matches enabled (' + B.enabled + ')', !!t.els['ch-bfcm'] && (on ? t.els['ch-bfcm'].style.display !== 'none' : t.els['ch-bfcm'].style.display === 'none'), `display=${t.els['ch-bfcm'] && t.els['ch-bfcm'].style.display}`);
+      if (on) check('enabled:true as shipped: the #bfcm deep link opens the BFCM view and fetches its tabs',
+        TA.channel === 'bfcm' && mounted() && t.fetchLog.some(isBfcmFetch), `channel=${TA.channel}`);
+      else check('#bfcm deep link ignored while enabled:false (google stays, no BFCM fetch, view not mounted)',
+        TA.channel === 'google' && !t.fetchLog.some(isBfcmFetch) && !mounted(), `channel=${TA.channel}`);
       await TA.switchChannel('bfcm'); await flush();
-      check('switchChannel(bfcm) is a no-op while disabled', TA.channel === 'google' && !t.fetchLog.some(u => u.includes('sheet=BFCM%20')));
-      check('channel hint does not claim four views while bfcm is off', !/Four views/.test((t.els.channelhint && t.els.channelhint.textContent) || ''));
+      if (on) check('enabled:true as shipped: switchChannel(bfcm) keeps the view open', TA.channel === 'bfcm' && mounted());
+      else check('switchChannel(bfcm) is a no-op while disabled', TA.channel === 'google' && !t.fetchLog.some(isBfcmFetch));
+      check('channel hint names four views only when Total MER and BFCM are both on', /Four views/.test((t.els.channelhint && t.els.channelhint.textContent) || '') === (on && TA.CHANNELS.mer.enabled === true), (t.els.channelhint && t.els.channelhint.textContent) || '');
       check('esc() also escapes " and \' (spec 23)', typeof TA.esc === 'function' && TA.esc(`<a href="x">'&`) === '&lt;a href=&quot;x&quot;&gt;&#39;&amp;');
       check('__apollo exposes the pure forecast (spec 19)', typeof TA.forecast === 'function');
+      // the Save button follows the shipped configWrites + endpointUrl (the view opened in the sandbox to look at it)
+      if (!on) { TA.CHANNELS.bfcm.enabled = true; await TA.switchChannel('bfcm'); await flush(); }
+      const sh = String(t.els.content.innerHTML || ''), btns = sh.match(/<button[^>]*data-bf="save"[^>]*>[^<]*<\/button>/g) || [];
+      if (!B.configWrites) check('configWrites:false as shipped: no Save button and no edit controls', !btns.length && !/data-bf="budget-total"/.test(sh));
+      else if (B.endpointUrl === '') check('configWrites:true with endpointUrl empty: every Save button disabled, "Saving is not switched on yet"', btns.length >= 1 && btns.every(x => /disabled/.test(x) && />Saving is not switched on yet</.test(x)), btns.join(' | '));
+      else check('configWrites:true with an /exec endpointUrl: "Save for everyone" (disabled until an edit) and the name box', btns.length >= 1 && btns.every(x => />Save for everyone</.test(x) && /disabled/.test(x)) && /data-bf="who"/.test(sh), btns.join(' | '));
+      await TA.switchChannel('google'); await flush();
     }
     // ---- launch switch on before boot: the #bfcm deep link opens the view
     {
-      const { t, TA, V } = await bootBfcm({ open: false, patch: [BFCM_ON], location: { hash: '#bfcm', pathname: '/', search: '' } });
+      const { t, TA, V } = await bootBfcm({ open: false, patch: BFCM_ON_PATCH, location: { hash: '#bfcm', pathname: '/', search: '' } });
       await flush();
       const n = bfUrls(t.fetchLog);
       check('enabled:true: #bfcm deep link opens the BFCM view', TA.channel === 'bfcm' && !!(V && V._state && V._state.mounted), `channel=${TA.channel}`);
@@ -972,6 +1020,53 @@ async function main() {
     {
       const { html } = await bootBfcm({ bf: { log: '<html>not a csv</html>' } });
       check('log read fails: same message, no guessed budget', /Budget settings could not be read/.test(html()) && !/% of \$/.test(html()));
+    }
+
+    // ---- final fix I2 (REVIEW FOCUS 2 on screen): a 100% or 0% split leaves one platform a $0 budget, which must
+    //      read "No budget for <Platform>", never "$X spent of $0"; a blank split is "not set", never "No budget set"
+    {
+      const logWith = v2 => BFX.log.replace(/\n?$/, '\n') + '"3","2026-10-17T11:00:00.000Z","Glen","budget 2026-10","32000","' + v2 + '","00000000-0000-4000-8000-000000000003"\n';
+      for (const [pct, zero, other, name] of [['100', 'm', 'g', 'Meta'], ['0', 'g', 'm', 'Google']]) {
+        const { V, html } = await bootBfcm({ bf: { log: logWith(pct) } });
+        const b = paceBars(html());
+        check(`split ${pct}% Google: the ${name} bar reads "No budget for ${name}", never "of $0", no % and no colour band`,
+          V._state.cfg.budgets['2026-10'].pct === +pct && b[zero].includes('No budget for ' + name) && !b[zero].includes('of $0') && !/% of/.test(b[zero]) && !/class="bf-(under|ok|amber|red)"/.test(b[zero]), plain(b[zero]));
+        check(`split ${pct}% Google: the other platform and the total still pace against their budgets`,
+          new RegExp('\\d+% of \\$32,000').test(b[other]) && b[other].includes('of $32,000</span>') && /\d+% of \$32,000/.test(b.t), plain(b[other]) + ' || ' + plain(b.t));
+      }
+      const { html } = await bootBfcm({ bf: { log: logWith('') } });
+      const b = paceBars(html());
+      check('blank split: the Google and Meta bars read "Google / Meta split not set", never "No budget set"',
+        ['g', 'm'].every(k => b[k].includes('Google / Meta split not set') && !/No budget set/.test(b[k]) && !/% of/.test(b[k])), plain(b.g) + ' || ' + plain(b.m));
+      check('blank split: the total bar still paces against $32,000', /\d+% of \$32,000/.test(b.t) && b.t.includes('of $32,000</span>'), plain(b.t));
+    }
+
+    // ---- final fix M1: one owner typo (sale_end before sale_start) or a paint that throws never leaves "Loading..."
+    {
+      const badEnd = BFX.config.replace('"sale_end","2026-12-06",""', '"sale_end","2026-10-01",""');
+      const { V, html } = await bootBfcm({ bf: { config: badEnd } });
+      const h = html(), S = V._state;
+      check('sale_end before sale_start: the view paints (no "Loading"), the sale dates fall back to 13 Oct to 6 Dec',
+        badEnd !== BFX.config && !/Loading/.test(h) && S.cfg && S.cfg.saleStart === '2026-10-13' && S.cfg.saleEnd === '2026-12-06' && S.month === '2026-10', S.cfg ? JSON.stringify({ s: S.cfg.saleStart, e: S.cfg.saleEnd, m: S.month, err: S.cfg.error }) : 'no cfg');
+      check('sale_end before sale_start: says the sale dates are not valid, hides pacing against budget, data still live',
+        S.cfg.error === 'Sale dates in the settings are not valid' && /sale dates in the settings are not valid/i.test(h) && !/% of \$/.test(h) && /x$/.test(tileOf(h, 'google').v), (h.match(/<div class="bf-alert">[^<]*/) || ['(no alert)'])[0]);
+    }
+    {
+      const { t, TA, V, html } = await bootBfcm({ open: false });
+      const logged = [];
+      t.sandbox.console = { log() {}, warn() {}, error: (...a) => logged.push(a.map(String).join(' ')) };
+      const real = t.sandbox.BFCM_CORE.pacing;
+      t.sandbox.BFCM_CORE.pacing = () => { throw new Error('sim forced paint throw'); };
+      TA.CHANNELS.bfcm.enabled = true;
+      let threw = false;
+      try { await TA.switchChannel('bfcm'); await flush(); } catch (e) { threw = true; }
+      const h = html();
+      check('a paint that throws: the "needs attention" alert style with plain text, never the loading text',
+        !threw && !/Loading/.test(h) && /<div class="bf-alert" role="alert">Something went wrong showing these figures\. Please refresh the page\.<\/div>/.test(h), h.slice(0, 200));
+      check('a paint that throws: the error is logged to the console', logged.some(s => /sim forced paint throw/.test(s)), JSON.stringify(logged));
+      t.sandbox.BFCM_CORE.pacing = real;
+      V.setPreset('last7');
+      check('a paint that throws: the next paint recovers once the fault is gone', /2 · Returns/.test(html()) && !/Something went wrong/.test(html()));
     }
 
     // ---- refresh timers on a fake clock (17 Oct 08:00 Toronto: every source fresh)
@@ -1356,10 +1451,11 @@ async function main() {
   // ---------------- the live BFCM tabs parse and render (live runs only)
   if (!LOCAL_CSV) {
     section('bfcm channel (live sheet)');
-    const base = csvUrl.replace('&sheet=Sheet1', '&sheet=');
+    // fetch EXACTLY the URLs the page fetches (headers=1 included), as the weekly sections do
+    const B = A.CHANNELS.bfcm;
     let live = null;
-    try { live = { daily: await fetchCSV(base + 'BFCM%20Daily'), config: await fetchCSV(base + 'BFCM%20Config'), log: await fetchCSV(base + 'BFCM%20Config%20Log') }; } catch (e) { live = null; }
-    check('live BFCM tabs fetched', !!live);
+    try { live = { daily: await fetchCSV(B.dailyCsvUrl), config: await fetchCSV(B.configCsvUrl), log: await fetchCSV(B.logCsvUrl) }; } catch (e) { live = null; }
+    check('live BFCM tabs fetched (the page\'s own URLs)', !!live);
     if (live) {
       const { V, html } = await bootBfcm({ now: new Date().toISOString(), bf: live });
       const h = html();

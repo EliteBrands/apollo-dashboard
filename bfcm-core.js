@@ -14,6 +14,8 @@
   var LOG_HEADERS = ['Seq', 'At', 'Who', 'Key', 'Value', 'Value 2', 'Request ID'];
 
   var DEFAULTS = { saleStart: '2026-10-13', saleEnd: '2026-12-06', google_roas: 12, meta_roas: 12, mer: 12 };
+  var SALE_END_MAX = '2027-01-31';   // the page and the daily task both stop by then
+  var SALE_DATES_ERROR = 'Sale dates in the settings are not valid';
   var ISO_RE = /^\d{4}-\d{2}-\d{2}$/;
   var MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   var DAY_MS = 86400000;
@@ -49,8 +51,18 @@
     return true;
   }
 
+  // built from formatToParts, never from format(): the shape of a formatted date string differs between ICU builds
   function torontoDate(instant) {
-    return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Toronto', year: 'numeric', month: '2-digit', day: '2-digit' }).format(instant);
+    var p = {};
+    new Intl.DateTimeFormat('en-US', { timeZone: 'America/Toronto', year: 'numeric', month: '2-digit', day: '2-digit' })
+      .formatToParts(instant).forEach(function (o) { p[o.type] = o.value; });
+    return p.year + '-' + p.month + '-' + p.day;
+  }
+  // a real calendar day written YYYY-MM-DD (so 2026-02-30 and 2026-12-6 are not)
+  function realDate(s) {
+    if (!ISO_RE.test(s)) return false;
+    var t = utc(s);
+    return isFinite(t) && new Date(t).toISOString().slice(0, 10) === s;
   }
 
   // ---- phases / months
@@ -121,8 +133,11 @@
       last[r[3]] = { who: r[2] || '', at: r[1] || '' };
     });
 
-    var saleStart = vals.sale_start && ISO_RE.test(vals.sale_start.v) ? vals.sale_start.v : DEFAULTS.saleStart;
-    var saleEnd = vals.sale_end && ISO_RE.test(vals.sale_end.v) ? vals.sale_end.v : DEFAULTS.saleEnd;
+    // a blank cell means not set (the default); a typed date must be a real day, end on or after the start, by 31 Jan 2027.
+    // Anything else is one owner typo away from an empty month list, so it is an error and the defaults are used.
+    var saleStart = vals.sale_start && vals.sale_start.v !== '' ? vals.sale_start.v : DEFAULTS.saleStart;
+    var saleEnd = vals.sale_end && vals.sale_end.v !== '' ? vals.sale_end.v : DEFAULTS.saleEnd;
+    if (!realDate(saleStart) || !realDate(saleEnd) || saleEnd < saleStart || saleEnd > SALE_END_MAX) return failed(SALE_DATES_ERROR);
     function target(k) { var t = vals['target ' + k] ? num(vals['target ' + k].v) : null; return t == null ? DEFAULTS[k] : t; }
     var budgets = {};
     saleMonths(saleStart, saleEnd).forEach(function (m) { budgets[m] = null; });
@@ -407,7 +422,7 @@
   }
 
   return {
-    DAILY_HEADERS: DAILY_HEADERS, CONFIG_HEADERS: CONFIG_HEADERS, LOG_HEADERS: LOG_HEADERS,
+    DAILY_HEADERS: DAILY_HEADERS, CONFIG_HEADERS: CONFIG_HEADERS, LOG_HEADERS: LOG_HEADERS, SALE_DATES_ERROR: SALE_DATES_ERROR,
     phases: phases, saleMonths: saleMonths, parseDaily: parseDaily, resolveConfig: resolveConfig, torontoDate: torontoDate,
     presetRange: presetRange, completeThrough: completeThrough, windowTotals: windowTotals, pacing: pacing,
     weekProjection: weekProjection, staleness: staleness, lagTag: lagTag,

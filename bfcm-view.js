@@ -128,9 +128,17 @@
       const sig = r.map(o => o.err ? '!' + o.err : o.text).join('\u0000');
       if (S.loaded && sig === S.sig) { if (!r[0].err) S.lastOkAt = Date.now(); return; }
       S.sig = sig;
-      apply(r[0], r[1], r[2]);
-      paint();
+      try { apply(r[0], r[1], r[2]); paint(); } catch (e) { broken(e); }
     });
+  }
+  // a fault while reading or showing the figures: a plain alert in place of the view (never the loading text left
+  // on screen), the detail in the console; the next refresh tries again even when the sheet has not changed
+  function broken(e) {
+    try { if (typeof console !== 'undefined' && console.error) console.error('BFCM view could not show the figures:', e); } catch (_) { /* no console */ }
+    try { destroyCharts(); } catch (_) { charts = []; }
+    if (S) S.sig = '';
+    el.className = '';
+    el.innerHTML = '<div class="bf"><div class="bf-alert" role="alert">Something went wrong showing these figures. Please refresh the page.</div></div>';
   }
   function apply(d, c, l) {
     if (d.err) S.fetchError = S.rows.length ? 'refresh' : 'load';   // a failed refresh keeps the last good rows
@@ -412,7 +420,8 @@
     const mlabel = m => { const end = C.addDays(m + '-01', 40).slice(0, 7) + '-01', last = C.addDays(end, -1); return MONTH[+m.slice(5) - 1] + (S.cfg.saleEnd < last && S.cfg.saleEnd.slice(0, 7) === m ? ' (to ' + dshort(S.cfg.saleEnd) + ')' : ''); };
     const seg = ms.map(m => '<button type="button" class="bf-pre" data-bf="month" data-v="' + m + '" aria-pressed="' + (S.month === m) + '">' + mlabel(m) + '</button>').join('');
     let left = '<div class="bf-lbl">Month</div><div class="bf-segrow" role="group" aria-label="Budget month">' + seg + '</div>';
-    if (S.cfg.error) left += '<div class="bf-alert">Budget settings could not be read, so pacing against budget is hidden. Spend and where it lands are still live.</div>';
+    if (S.cfg.error) left += '<div class="bf-alert">' + (S.cfg.error === C.SALE_DATES_ERROR ? 'The sale dates in the settings are not valid' : 'Budget settings could not be read') +
+      ', so pacing against budget is hidden. Spend and where it lands are still live.</div>';
     else if (ctx.CHANNELS.bfcm.configWrites) left += editControlsHTML();
     else left += readOnlyBudgetHTML();
     return '<div class="bf-band">1 · Budget</div><div class="bf-budget"><div class="bf-set">' + left + '</div>' +
@@ -472,6 +481,13 @@
     // unknown is never shown as blank: an unreadable config says "Budget unavailable", only a blank cell says "No budget set"
     if (p.status === 'not-started') return '<div class="bf-note bf-starts">Starts ' + dshort(mStart) + '.' + (S.cfg.error ? ' Budget unavailable.' : budgetFor(month) ? '' : ' No budget set yet.') + '</div>';
     const gaps = src => C.completeThrough(S.rows, src, mStart, end).gaps;
+    // a month total with no Google share (Value 2 blank): the platform bars say the split is not set, the total still paces
+    const bud = budgetFor(month), splitUnset = !S.cfg.error && !!bud && bud.total != null && bud.pct == null;
+    // the budget words after "$X spent": a $0 budget (a 100% / 0% split) is "No budget for <Platform>", never "of $0"
+    const budgetWords = (b, key, name) => b.budget === 0 ? ' · No budget for ' + (key === 'total' ? 'Google or Meta' : name)
+      : b.budget != null ? ' of ' + m$(b.budget)
+      : b.landsAt == null ? ''
+      : ' · ' + (S.cfg.error ? 'Budget unavailable' : splitUnset && key !== 'total' ? 'Google / Meta split not set' : 'No budget set');
     return [['google', 'Google', ['google']], ['meta', 'Meta', ['meta']], ['total', 'Both', ['google', 'meta']]].map(r => {
       const b = p[r[0]], g = r[0] === 'total' ? gaps('google').concat(gaps('meta')).sort().filter((d, i, a) => a.indexOf(d) === i) : gaps(r[0]);
       const scale = Math.max(b.budget || 0, b.landsAt || 0, b.spent || 0);
@@ -479,7 +495,7 @@
       const lands = b.landsAt == null ? 'lands at -' : 'lands at <b class="bf-' + b.band + '">' + m$(b.landsAt) +
         (b.pct == null ? '' : ' (' + Math.round(b.pct) + '% of ' + m$(b.budget) + ') · ' + BAND[b.band]) + '</b>';
       return '<div class="bf-bar"><div class="bf-bh"><span class="bf-bn">' + (r[0] === 'total' ? '<i class="bf-sw g"></i><i class="bf-sw m"></i>' : '<i class="bf-sw ' + r[0].charAt(0) + '"></i>') + r[1] + '</span>' +
-        '<span class="bf-bv">' + m$(b.spent) + ' spent' + (b.budget == null ? (b.landsAt == null ? '' : ' · ' + (S.cfg.error ? 'Budget unavailable' : 'No budget set')) : ' of ' + m$(b.budget)) + '</span></div>' +
+        '<span class="bf-bv">' + m$(b.spent) + ' spent' + budgetWords(b, r[0], r[1]) + '</span></div>' +
         '<div class="bf-track"><div class="bf-fill ' + r[0] + '" style="width:' + pctOf(b.spent, scale).toFixed(1) + '%"></div>' +
         (b.budget ? '<div class="bf-budgetline" style="left:' + pctOf(b.budget, scale).toFixed(1) + '%"></div>' : '') +
         (b.landsAt != null ? '<div class="bf-proj" style="width:' + pctOf(b.landsAt, scale).toFixed(1) + '%"></div>' : '') + '</div>' +

@@ -401,9 +401,10 @@ const CHANNELS = {
   // /exec URL (clients/apollo-scooters/apps-script/bfcm-config.gs). While it is '' the Save buttons stay disabled ("Saving
   // is not switched on yet"). configWrites hides controls only: the server's WRITES_ENABLED is the real switch.
   bfcm: { key:'bfcm', label:'BFCM 2026', enabled:false, configWrites:false, endpointUrl:'',
-    dailyCsvUrl: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=BFCM%20Daily`,
-    configCsvUrl: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=BFCM%20Config`,
-    logCsvUrl: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=BFCM%20Config%20Log`,
+    // headers=1: the first row is the header row (gviz otherwise guesses, and can fold data rows into the header)
+    dailyCsvUrl: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&headers=1&sheet=BFCM%20Daily`,
+    configCsvUrl: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&headers=1&sheet=BFCM%20Config`,
+    logCsvUrl: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&headers=1&sheet=BFCM%20Config%20Log`,
     refreshMs: 900000,
     subline: 'Prepared by Elite Brands · BFCM 2026 · All figures CAD · Toronto days',
     footnote: "· Performance Marketing · Google figures are Google Ads purchase conversions, counted by conversion time. Meta figures are Meta's own purchase figures (7-day click / 1-day view); Google and Meta both count some of the same orders, so their revenue is never added together. Store sales are Tracked Revenue from all three Shopify stores, the same basis as the Total MER view (orders after discounts, before shipping and tax), in CAD at Bank of Canada weekly rates. MER = store sales divided by Google + Meta ad spend. Days are Toronto calendar days, and every time shown is Toronto time · Questions: reply to your weekly email",

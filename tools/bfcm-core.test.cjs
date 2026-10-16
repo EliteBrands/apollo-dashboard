@@ -392,3 +392,43 @@ test('forecast monthSpend: pre-sale days counted, gap = null, stops at month end
   assert.equal(o.monthSpend.google, 31000);
   assert.equal(o.monthSpend.meta, 15500);
 });
+
+test('final fix M1: impossible sale dates set an error and fall back to the default dates (never an empty month list)', () => {
+  const ERR = 'Sale dates in the settings are not valid';
+  const withDates = (end, start) => C.resolveConfig(cfgCsv.replace('sale_end,2026-12-06,', 'sale_end,' + end + ',')
+    .replace('sale_start,2026-10-13,', 'sale_start,' + (start == null ? '2026-10-13' : start) + ','), logCsv, parseCSV);
+  // end before start, not a real day, month 13, after 31 Jan 2027, not zero-padded, a start that is not a real day
+  for (const [end, start] of [['2026-10-01'], ['2026-02-30'], ['2026-13-01'], ['2027-02-01'], ['2026-12-6'], ['2026-12-06', '2026-11-31']]) {
+    const c = withDates(end, start), at = end + ' / ' + start;
+    assert.equal(c.error, ERR, at);
+    assert.equal(c.saleStart, '2026-10-13', at);
+    assert.equal(c.saleEnd, '2026-12-06', at);
+    assert.deepEqual(C.saleMonths(c.saleStart, c.saleEnd), ['2026-10', '2026-11', '2026-12'], at);
+    assert.ok(Object.values(c.budgets).every(v => v === null), at);   // no guessed budget, as for any unreadable setting
+    assert.deepEqual(c.targets, { google_roas: 12, meta_roas: 12, mer: 12 }, at);
+  }
+  // the same through the log (the page's save path)
+  assert.equal(C.resolveConfig(cfgCsv, [logHdr, '1,2026-10-14T01:00:00.000Z,g,sale_end,2026-10-05,,r1'].join('\n'), parseCSV).error, ERR);
+  // fine: end on the start day, end on 31 Jan 2027, a blank cell (= not set, the default, no error)
+  assert.equal(withDates('2026-10-13').error, null);
+  assert.equal(withDates('2026-10-13').saleEnd, '2026-10-13');
+  assert.equal(withDates('2027-01-31').error, null);
+  assert.equal(withDates('2027-01-31').saleEnd, '2027-01-31');
+  assert.equal(withDates('').error, null);
+  assert.equal(withDates('').saleEnd, '2026-12-06');
+});
+
+test('final fix M2: torontoDate reads formatToParts, whatever shape format() returns', () => {
+  const Real = Intl.DateTimeFormat;
+  // older ICU builds format en-CA as MM/DD/YYYY: a format() that returns any other shape must not matter
+  Intl.DateTimeFormat = function (loc, opts) {
+    const f = new Real(loc, opts);
+    return { format: () => '10/17/2026', formatToParts: d => f.formatToParts(d), resolvedOptions: () => f.resolvedOptions() };
+  };
+  try {
+    assert.equal(C.torontoDate(new Date('2026-11-27T21:30:00Z')), '2026-11-27');
+    assert.equal(C.torontoDate(new Date('2026-11-01T04:30:00Z')), '2026-11-01');   // DST edge: 00:30 EDT
+    assert.equal(C.torontoDate(new Date('2026-11-01T03:30:00Z')), '2026-10-31');   // 23:30 EDT
+    assert.equal(C.torontoDate(new Date('2027-01-01T04:59:00Z')), '2026-12-31');   // year turns in Toronto at 05:00Z
+  } finally { Intl.DateTimeFormat = Real; }
+});
