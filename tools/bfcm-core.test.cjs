@@ -290,7 +290,7 @@ test('lag tags: Google <= 2 days, Meta <= 7 days, none for the store', () => {
 
 // ---- Task 9: forecast engine
 const FC_CFG = { saleStart: '2026-10-13', saleEnd: '2026-12-06', month: '2026-10', targets: { google_roas: 12, meta_roas: 12, mer: 12 } };
-const fcRows = parse(flat('2026-10-13', '2026-10-19', [1000, 10000, 10], [500, 3000, 5], [12000, 9])).rows;   // 7 days, through 19 Oct
+const fcRows = parse(flat('2026-10-01', '2026-10-19', [1000, 10000, 10], [500, 3000, 5], [12000, 9])).rows;   // 1..12 Oct pre-sale rows count toward month spend   // 7 days, through 19 Oct
 // remaining = 20 Oct .. 6 Dec = 48 days
 const fcVarRows = parse(range('2026-10-13', '2026-10-19').map((d, i) => day(d, [1000, 10000, 10], [500, 3000, 5], [[8200, 9300, 13100, 15400, 7700, 16900, 11250][i], 9]))).rows;
 
@@ -314,9 +314,9 @@ test('forecast neutral sliders reproduce the 7-day run-rate exactly', () => {
   assert.equal(f.spendCeiling, 1000);
   // sale MER = store / (realised spend + projected spend)
   assert.equal(f.saleMer.point, (84000 + 12000 * 48) / (10500 + 1500 * 48));
-  // Oct: spent 13..19 (7 x 1500) + 12 days left x 1500
-  assert.equal(f.monthSpend.google, 7000 + 1000 * 12);
-  assert.equal(f.monthSpend.meta, 3500 + 500 * 12);
+  // Oct (D2, whole calendar month): spent 1..19 Oct (19 days) + 12 days left
+  assert.equal(f.monthSpend.google, 19000 + 1000 * 12);
+  assert.equal(f.monthSpend.meta, 9500 + 500 * 12);
   assert.equal(f.monthSpend.total, f.monthSpend.google + f.monthSpend.meta);
 });
 
@@ -335,7 +335,7 @@ test('forecast clamps sliders: spend.google 5 -> 1.0, roas 9 -> 1.5, spend -3 ->
   assert.deepEqual(hi, one);
   const lo = C.forecast(fcRows, FC_CFG, { spend: { meta: -3 } });
   assert.equal(C.forecast(fcRows, FC_CFG, { spend: { meta: -0.5 } }).monthSpend.meta, lo.monthSpend.meta);
-  assert.equal(lo.monthSpend.meta, 3500 + 250 * 12);
+  assert.equal(lo.monthSpend.meta, 9500 + 250 * 12);
   const r = C.forecast(fcRows, FC_CFG, { roas: { google: 9 } });
   assert.equal(r.platformRevenue.google, 70000 + 1000 * 10 * 1.5 * 48);
   assert.equal(C.forecast(fcRows, FC_CFG, { roas: { google: 0.1 } }).platformRevenue.google, 70000 + 1000 * 10 * 0.5 * 48);
@@ -377,4 +377,18 @@ test('forecast: no NaN or Infinity anywhere, month not started', () => {
   assert.equal(nov.monthSpend.google, 1000 * 30);
   const dec = C.forecast(fcRows, Object.assign({}, FC_CFG, { month: '2026-12' }), {});
   assert.equal(dec.monthSpend.google, 1000 * 6);
+});
+
+test('forecast monthSpend: pre-sale days counted, gap = null, stops at month end', () => {
+  const f = C.forecast(fcRows, FC_CFG, {});
+  assert.equal(f.monthSpend.google, 19000 + 12000);
+  // missing 5 Oct -> null, not a partial sum
+  const gap = parse(flat('2026-10-01', '2026-10-19', [1000, 10000, 10], [500, 3000, 5], [12000, 9]).filter(x => x.d !== '2026-10-05')).rows;
+  assert.equal(C.forecast(gap, FC_CFG, {}).monthSpend.google, null);
+  // through past the October end: only October spend, no projected term
+  const long = parse(flat('2026-10-01', '2026-11-05', [1000, 10000, 10], [500, 3000, 5], [12000, 9])).rows;
+  const o = C.forecast(long, FC_CFG, {});
+  assert.equal(o.throughDate, '2026-11-05');
+  assert.equal(o.monthSpend.google, 31000);
+  assert.equal(o.monthSpend.meta, 15500);
 });

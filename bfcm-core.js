@@ -385,13 +385,14 @@
       }
     }
 
-    // month spend: spent in cfg.month up to through (never before saleStart) + spendDay x days left in the month (capped at saleEnd)
+    // month spend: spent over the whole calendar month up to min(through, month end), pre-sale days included (D2), + spendDay x days left in the month (month end capped at saleEnd).
+    // A missing day in that span makes the figure null, never a partial sum.
     if (cfg.month) {
-      var mStart = cfg.month + '-01', mEnd = minDate(monthEnd(cfg.month), saleEnd), mFrom = maxDate(mStart, saleStart);
+      var mStart = cfg.month + '-01', mEnd = minDate(monthEnd(cfg.month), saleEnd);
       var monthOf = function (src, sd) {
         if (sd == null) return null;
         if (mStart > through) return fin(sd * eachDay(mStart, mEnd).length);
-        var spent = mFrom > through ? 0 : sumField(map, src, 'spend', mFrom, through);
+        var spent = sumField(map, src, 'spend', mStart, minDate(through, mEnd));
         if (spent == null) return null;
         return fin(spent + sd * eachDay(addDays(through, 1), mEnd).length);
       };
