@@ -405,7 +405,7 @@ const CHANNELS = {
   // #bfcm deep link); configWrites shows the budget / target edit controls; endpointUrl = the config endpoint's Apps Script
   // /exec URL (clients/apollo-scooters/apps-script/bfcm-config.gs). While it is '' the budget block stays read-only (no
   // edit controls). configWrites hides controls only: the server's WRITES_ENABLED is the real switch.
-  bfcm: { key:'bfcm', label:'BFCM 2026', enabled:false, configWrites:false, endpointUrl:'',
+  bfcm: { key:'bfcm', label:'BFCM 2026', enabled:true, configWrites:false, endpointUrl:'',   // enabled ON since 2026-10-17 (Glen)
     // headers=1: the first row is the header row (gviz otherwise guesses, and can fold data rows into the header)
     dailyCsvUrl: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&headers=1&sheet=BFCM%20Daily`,
     configCsvUrl: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&headers=1&sheet=BFCM%20Config`,
