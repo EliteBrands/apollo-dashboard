@@ -62,7 +62,8 @@
   .band .rule{flex:1;height:1px;background:var(--net-line);min-width:24px}
   .band .bd{font-size:12px;color:var(--muted)}
   .band.grey .bl{color:var(--muted)} .band.grey .bl::before{background:var(--muted)} .band.grey .rule{background:var(--border)}
-  .info{width:18px;height:18px;border-radius:50%;border:1px solid currentColor;background:transparent;color:inherit;font-family:var(--mono);font-size:10.5px;font-weight:600;line-height:1;display:inline-grid;place-items:center;cursor:pointer;padding:0;text-transform:none;letter-spacing:0}
+  .info{position:relative;width:18px;height:18px;border-radius:50%;border:1px solid currentColor;background:transparent;color:inherit;font-family:var(--mono);font-size:10.5px;font-weight:600;line-height:1;display:inline-grid;place-items:center;cursor:pointer;padding:0;text-transform:none;letter-spacing:0}
+  .info::after{content:'';position:absolute;inset:-6px}   /* 30px hit area on a phone, 18px visual */
   .info:hover,.info[aria-expanded="true"]{background:currentColor}
   .info:hover span,.info[aria-expanded="true"] span{color:var(--ink)}
   .info:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
@@ -90,7 +91,8 @@
   .cardhead{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
   .cardhead h2{font-family:var(--head);font-weight:600;font-size:16px}
   .cardhead .sub{font-size:12px;color:var(--muted)}
-  .legend{margin-left:auto;display:flex;gap:16px;font-size:12px;color:var(--muted);align-items:center}
+  .legend{margin-left:auto;display:flex;flex-wrap:wrap;gap:8px 16px;font-size:12px;color:var(--muted);align-items:center}
+  .legend>span{white-space:nowrap}
   .chip{width:10px;height:10px;border-radius:3px;display:inline-block;margin-right:6px;vertical-align:-1px}
   .lchip{width:14px;height:2px;display:inline-block;margin-right:6px;vertical-align:3px}
   .expandbtn{display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(148,163,184,.25);border-radius:999px;padding:6px 13px;font-family:var(--head);font-weight:600;font-size:11.5px;color:var(--muted);background:transparent;cursor:pointer}
@@ -125,9 +127,11 @@
   /* meta cards carry 6 stats collapsed and 8 expanded - 3 and 4 columns divide both evenly, so no orphan row */
   .mkt .mstats.meta{grid-template-columns:repeat(3,minmax(0,1fr))}
   .mkt.expanded .mstats.meta{grid-template-columns:repeat(4,minmax(0,1fr))}
-  /* mer cards carry 4 stats collapsed (Spend, Tracked Revenue, Tracked MER, Net MER) and 6 expanded */
-  .mkt .mstats.mer{grid-template-columns:repeat(4,minmax(0,1fr))}
-  .mkt.expanded .mstats.mer{grid-template-columns:repeat(6,minmax(0,1fr))}
+  /* mer cards: 3 stats collapsed / 4 expanded without the Net band; with it (.net) 4 / 6 (Net MER + Net MER N-wk) */
+  .mkt .mstats.mer{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .mkt.expanded .mstats.mer{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .mkt .mstats.mer.net{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .mkt.expanded .mstats.mer.net{grid-template-columns:repeat(6,minmax(0,1fr))}
   .ms .k{font-size:10.5px;color:var(--muted)}
   .ms .v{font-family:var(--mono);font-size:14.5px;margin-top:2px}
   .ms .d{font-size:10.5px;margin-top:1px;color:var(--muted)}
@@ -141,7 +145,7 @@
   .loading{padding:40px;text-align:center;color:var(--muted)}
   footer{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px;border-top:1px solid var(--border);padding-top:16px;flex-wrap:wrap}
   footer b{font-family:var(--head);font-weight:600;color:var(--text)}
-  @media (max-width:980px){ .tiles{grid-template-columns:repeat(3,minmax(0,1fr))} .tiles.meta{grid-template-columns:repeat(3,minmax(0,1fr))} .markets{grid-template-columns:minmax(0,1fr)} .wins{grid-template-columns:1fr} .bmgrid{grid-template-columns:minmax(0,1fr)} .wrap{padding:20px} }
+  @media (max-width:980px){ .tiles{grid-template-columns:repeat(3,minmax(0,1fr))} .tiles.meta{grid-template-columns:repeat(3,minmax(0,1fr))} .tiles.mer{grid-template-columns:repeat(2,minmax(0,1fr))} .markets{grid-template-columns:minmax(0,1fr)} .wins{grid-template-columns:1fr} .bmgrid{grid-template-columns:minmax(0,1fr)} .wrap{padding:20px} }
   @media (max-width:600px){
     header{flex-wrap:wrap}
     .headright{margin-left:0;text-align:left;flex:1 1 100%}
@@ -152,8 +156,8 @@
     .tile .v{font-size:19px}
     .mkt.expanded .mstats{grid-template-columns:repeat(3,minmax(0,1fr))}
     .mkt.expanded .mstats.meta{grid-template-columns:repeat(2,minmax(0,1fr))}
-    .mkt .mstats.mer{grid-template-columns:repeat(2,minmax(0,1fr))}
-    .mkt.expanded .mstats.mer{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .mkt .mstats.mer,.mkt .mstats.mer.net{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .mkt.expanded .mstats.mer,.mkt.expanded .mstats.mer.net{grid-template-columns:repeat(2,minmax(0,1fr))}
     .tile.ghost{display:none}
     .channelrow .hint{display:none}
   }
@@ -287,10 +291,15 @@ const CHANNELS = {
       { key:'aus', name:'Australia',     tag:'Google + Meta · AU store', foot:' · small volumes swing weekly' },
     ],
     targetRoas: null, ratioLabel:'Tracked MER', revLabel:'Tracked Revenue',
-    subline: 'Prepared by Elite Brands · Total MER · All figures CAD · Tracked Revenue = what the ad platforms report against · Net Sales = your Shopify Net sales, after returns',
-    footnote: '· Performance Marketing · Ad Spend = Google Ads + Meta Ads. Tracked Revenue = Shopify orders after discounts, before shipping and tax, refunds not subtracted (the basis the ad platforms report). Net Sales = the Net sales figure in your Shopify Analytics (gross sales minus discounts minus returns). Both in CAD at Bank of Canada weekly rates. Open the i beside each label for the full definition. Demand Gen and multi-market spend count in the total only · Questions: reply to your weekly email',
+    // copy comes in two flavours: with the Net band on (netEnabled + net cells present) and without.
+    // showNet() picks at render time so the page never mentions a number it is not showing.
+    subline: 'Prepared by Elite Brands · Total MER · All figures CAD · Tracked Revenue = what the ad platforms report against · open the i beside the label for the full definition',
+    sublineNet: 'Prepared by Elite Brands · Total MER · All figures CAD · Tracked Revenue = what the ad platforms report against · Net Sales = your Shopify Net Sales figure, after returns',
+    footnote: '· Performance Marketing · Ad Spend = Google Ads + Meta Ads. Tracked Revenue = Shopify orders after discounts, before shipping and tax, refunds not subtracted (the basis the ad platforms report), in CAD at Bank of Canada weekly rates. Open the i beside the label for the full definition. Demand Gen and multi-market spend count in the total only · Questions: reply to your weekly email',
+    footnoteNet: '· Performance Marketing · Ad Spend = Google Ads + Meta Ads. Tracked Revenue = Shopify orders after discounts, before shipping and tax, refunds not subtracted (the basis the ad platforms report). Net Sales = the Net Sales figure in your Shopify Analytics (gross sales minus discounts minus returns). Both in CAD at Bank of Canada weekly rates. Open the i beside each label for the full definition. Demand Gen and multi-market spend count in the total only · Questions: reply to your weekly email',
     noteTitle: '', byline: '',
-    chartTitle: 'Tracked Revenue, Net Sales and Ad Spend · all markets · both channels',
+    chartTitle: 'Tracked Revenue and Ad Spend · all markets · both channels',
+    chartTitleNet: 'Tracked Revenue, Net Sales and Ad Spend · all markets · both channels',
   },
 };
 let CHANNEL='google';
@@ -320,11 +329,11 @@ const n0 = v => v==null?0:v;
 
 // ---- formatting
 const esc = s => String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-const fmt$ = v => v==null?'-':'$'+Math.round(v).toLocaleString('en-US');
+const fmt$ = v => v==null?'-':(v<0?'-$':'$')+Math.round(Math.abs(v)).toLocaleString('en-US');   // -$500, never $-500
 const fmtX = v => v==null?'-':(v).toFixed(1)+'x';
 const fmtI = v => v==null?'-':Math.round(v).toLocaleString('en-US');
 const fmtP = v => v==null?'-':Math.round(v*100)+'%';
-function pctDelta(cur,prev){ if(prev==null||cur==null||prev===0) return null; return (cur-prev)/prev; }
+function pctDelta(cur,prev){ if(prev==null||cur==null||prev<=0) return null; return (cur-prev)/prev; }   // a negative prior (Shopify net week) has no meaningful % change
 function deltaSpan(d,goodWhen){ // goodWhen: 'up' | 'down' | 'none'
   if(d==null) return '';
   const s=(d>=0?'+':'')+Math.round(d*100)+'%';
@@ -381,6 +390,9 @@ function loadData(text,c){
   }
   if(c.derived){
     const raw=[]; const seen=new Set();
+    // v3.3 columns are optional: read them only when the header row carries them in the contract
+    // order, else every net/returns cell is null (unknown, never 0) and the Net band stays hidden
+    const hasNet=!!(c.netHeaders&&c.netHeaders.every((hname,i)=>(hdr[c.headers.length+i]||'')===hname));
     for(const cells of recs.slice(1)){
       if(cells.length<c.headers.length) continue;
       const week=parseInt(cells[0],10);
@@ -394,7 +406,6 @@ function loadData(text,c){
       seen.add(week);
       // v3.3 columns are optional: read them only when the header row carries them in the contract
       // order, else every net/returns cell is null (unknown, never 0) and the Net band stays hidden
-      const hasNet=!!(c.netHeaders&&c.netHeaders.every((hname,i)=>(hdr[c.headers.length+i]||'')===hname));
       const nn=i=>hasNet?nullableNum(cells[i]):null;
       raw.push({ week, label:cells[1], endISO:endISO(cells[1]),
         rev:{ usa:nullableNum(cells[7]), can:nullableNum(cells[8]), aus:nullableNum(cells[9]), all:nullableNum(cells[10]) },
@@ -469,7 +480,9 @@ function windowStats(rows,bucket){
   // net cell. A partial sum would understate net sales and flatter Net MER, so it is null instead.
   const netKnown=CHANNEL==='mer'&&rev!=null&&rows.every(r=>r[bucket].revenue==null||r[bucket].net!=null);
   const net=netKnown?g('net'):null;
-  const ret=netKnown?g('returns'):null;
+  // returns get the same rule: every row with a net cell must also carry a returns cell, else null
+  const retKnown=netKnown&&rows.every(r=>r[bucket].net==null||r[bucket].returns!=null);
+  const ret=retKnown?g('returns'):null;
   return { spend, rev, pur, nc, reach:g('reach'), clicks:g('clicks'), atc:g('atc'),
     roas: (spend>0&&rev!=null)?rev/spend:null, cpa: pur>0?spend/pur:null, ncPct: pur>0?nc/pur:null,
     net, ret, netRoas: (netKnown&&spend>0)?net/spend:null };
@@ -489,7 +502,11 @@ function makePerfChart(canvas, rows, bucket, c){
   const spend=rows.map(r=>r[bucket].spend);
   const rev=rows.map(r=>r[bucket].revenue);
   const roas=rows.map(r=>{ const s=r[bucket].spend, v=r[bucket].revenue; return (s!=null&&s>0&&v!=null)?v/s:null; });
-  let revMax=niceMax(Math.max(...rev.map(n0),1));
+  // Net Sales (v3.3, mer only) shares the revenue axis and CAN exceed tracked revenue (Shopify counts
+  // cancelled orders as sales), so the axis max covers both series
+  const withNet=c.key==='mer'&&showNet(rows);
+  const netVals=withNet?rows.map(r=>netOf(r[bucket])):[];
+  let revMax=niceMax(Math.max(...rev.map(n0),...netVals.map(n0),1));
   const spendMaxData=Math.max(...spend.map(n0),0);
   if(T&&spendMaxData>revMax/T) revMax=niceMax(spendMaxData*T);  // no-clip guard (ratio-locked channels only)
   const roasMax=Math.max(T?16:4, Math.ceil(Math.max(...roas.map(n0),0)/4)*4);
@@ -500,9 +517,8 @@ function makePerfChart(canvas, rows, bucket, c){
       { type:'line', label:RL, data:roas, borderColor:'#C98500', backgroundColor:'#C98500', borderWidth:2, borderDash:[6,4], pointRadius:2.5, pointHoverRadius:5, tension:.25, spanGaps:false, yAxisID:'yRoas', order:2 },
   ];
   // Net Sales (v3.3, mer only): dashed lavender on the revenue axis. Net MER is tooltip-only (afterBody)
-  // so the chart stays at four series. Net sales sits at or below tracked revenue, so revMax needs no change.
-  const withNet=c.key==='mer'&&showNet(rows);
-  if(withNet) datasets.push({ type:'line', label:'Net Sales', data:rows.map(r=>netOf(r[bucket])), borderColor:'#B48CF2', backgroundColor:'#B48CF2', borderWidth:2, borderDash:[6,5], pointRadius:2.5, pointHoverRadius:5, tension:.25, spanGaps:false, yAxisID:'yRev', order:1 });
+  // so the chart stays at four series.
+  if(withNet) datasets.push({ type:'line', label:'Net Sales', data:netVals, borderColor:'#B48CF2', backgroundColor:'#B48CF2', borderWidth:2, borderDash:[6,5], pointRadius:2.5, pointHoverRadius:5, tension:.25, spanGaps:false, yAxisID:'yRev', order:1 });
   if(T) datasets.push({ type:'line', label:'__target', data:labels.map(()=>T), borderColor:'rgba(201,133,0,0.45)', borderWidth:1, borderDash:[3,5], pointRadius:0, pointHitRadius:0, yAxisID:'yRoas', order:4 });
   const chart=new Chart(canvas,{
     data:{ labels, datasets },
@@ -628,7 +644,7 @@ function render(){
   <div class="tiles mer">
     <div class="tile net"><div class="k">Net Sales</div><div class="v">${fmt$(W.net)}</div><div class="s">this week ${fmt$(wkNet)} ${deltaSpan(pctDelta(wkNet,pvNet),'up')}</div></div>
     <div class="tile net hl"><div class="k" title="Net sales per $1 of ad spend">Net MER</div><div class="v">${fmtX(W.netRoas)}</div><div class="s">this week ${fmtX(wkNetRoas)} ${deltaSpan(pctDelta(wkNetRoas,pvNetRoas),'up')}</div></div>
-    <div class="tile net"><div class="k">Returns</div><div class="v">${fmt$(W.ret)}</div><div class="s">${(W.net>0&&W.ret!=null)?fmtP(W.ret/W.net)+' of net sales · ':''}this week ${fmt$(wk.returns)}</div></div>
+    <div class="tile net"><div class="k">Returns</div><div class="v">${fmt$(W.ret)}</div><div class="s">${(W.rev>0&&W.ret!=null)?fmtP(W.ret/W.rev)+' of tracked revenue · ':''}this week ${fmt$(wk.returns)}</div></div>
     <div class="tile ghost" aria-hidden="true"></div>
   </div>`;
     html+=`${(()=>{ const parts=[]; if(fx.usdcad!=null) parts.push('1 USD = '+fx.usdcad.toFixed(3)+' CAD'); if(fx.audcad!=null) parts.push('1 AUD = '+fx.audcad.toFixed(3)+' CAD'); return parts.length?`<div class="rateline">Rates for week ending ${longEnd(latest.label)}: ${parts.join(' · ')}</div>`:''; })()}`;
@@ -657,9 +673,16 @@ function render(){
   </div>`;
   }
 
+  // mer only: swap the chrome copy to the Net flavour when the band is actually on screen
+  if(c.key==='mer'){
+    const on=showNet(rows);
+    const sl=document.getElementById('subline'), fn=document.getElementById('footnote');
+    if(sl&&c.sublineNet) sl.textContent=on?c.sublineNet:c.subline;
+    if(fn&&c.footnoteNet) fn.textContent=on?c.footnoteNet:c.footnote;
+  }
   html+=`<div class="card ${expanded.overview?'expanded':''}" id="card-overview">
     <div class="cardhead">
-      <div><h2>${c.chartTitle}</h2>
+      <div><h2>${(c.key==='mer'&&showNet(rows)&&c.chartTitleNet)?c.chartTitleNet:c.chartTitle}</h2>
       <div class="sub">tap or hover any week for exact values${c.targetRoas?' · spend bar meets the revenue line at exactly '+c.targetRoas.toFixed(1)+'x':''}</div></div>
       <div class="legend">
         <span><span class="chip" style="background:rgba(42,174,224,.55)"></span>Spend</span>
@@ -670,7 +693,7 @@ function render(){
       </div>
       <button class="expandbtn" data-expand="overview" aria-expanded="${expanded.overview}">${expanded.overview?'Collapse':'Expand'} ${chevron(expanded.overview)}</button>
     </div>
-    <div class="chartbox"><canvas id="chart-overview" role="img" aria-label="Weekly revenue, spend and ${c.ratioLabel||'ROAS'} chart, all markets"></canvas></div>
+    <div class="chartbox"><canvas id="chart-overview" role="img" aria-label="Weekly ${c.key==='mer'?'tracked revenue':'revenue'}${c.key==='mer'&&showNet(rows)?', net sales':''}, spend and ${c.ratioLabel||'ROAS'} chart, all markets"></canvas></div>
   </div>`;
 
   if(note||bullets.length||mktNotes.length){
@@ -705,14 +728,14 @@ function render(){
     html+=`<div class="mkt ${isX?'expanded':''}" id="card-${B.key}">
       <div class="mh">
         <h3>${B.name}</h3><span class="tag">${B.tag}</span>
-        <span class="mroas">${fmtX(mRoas)} <small class="${dRoas==null?'':(dRoas>=0?'up':'down')}">${dRoas==null?'':(dRoas>=0?'+':'')+dRoas.toFixed(1)+' WoW'}</small></span>
+        <span class="mroas" title="${c.ratioLabel||'ROAS'} this week">${fmtX(mRoas)} <small class="${dRoas==null?'':(dRoas>=0?'up':'down')}">${dRoas==null?'':(dRoas>=0?'+':'')+dRoas.toFixed(1)+' WoW'}</small></span>
         <button class="expandbtn" data-expand="${B.key}" aria-expanded="${isX}">${isX?'Collapse':'Expand'} ${chevron(isX)}</button>
       </div>
-      <div class="mstats${c.key==='meta'?' meta':(c.key==='mer'?' mer':'')}">
+      <div class="mstats${c.key==='meta'?' meta':(c.key==='mer'?(merNet?' mer net':' mer'):'')}">
         ${statCell('Spend',fmt$(m.spend),deltaSpan(pctDelta(m.spend,mp&&mp.spend),'none'))}
         ${statCell(REVL,fmt$(m.revenue),deltaSpan(pctDelta(m.revenue,mp&&mp.revenue),'up'))}
         ${c.key==='mer'?statCell(c.ratioLabel,fmtX(mRoas),deltaSpan(pctDelta(mRoas,mpRoas),'up')):statCell('Purchases',fmtI(m.purchases),deltaSpan(pctDelta(m.purchases,mp&&mp.purchases),'up'))}
-        ${merNet?statCell('Net MER',fmtX(mNetRoas),'net sales '+fmt$(mNet)+' '+deltaSpan(pctDelta(mNetRoas,mpNetRoas),'up'),'net'):''}
+        ${merNet?statCell('Net MER',fmtX(mNetRoas),deltaSpan(pctDelta(mNetRoas,mpNetRoas),'up')+' · net sales '+fmt$(mNet),'net'):''}
         ${c.key==='mer'?'':statCell('Cost / Purchase',mCpa==null?'-':'$'+Math.round(mCpa),deltaSpan(pctDelta(mCpa,mp&&mp.purchases>0?mp.spend/mp.purchases:null),'down'))}
         ${c.key==='meta'?statCell('Link Clicks',fmtI(m.clicks),deltaSpan(pctDelta(m.clicks,mp&&mp.clicks),'up')):''}
         ${c.key==='meta'?statCell('Adds to Cart',fmtI(m.atc),deltaSpan(pctDelta(m.atc,mp&&mp.atc),'up')):''}
@@ -736,19 +759,28 @@ function render(){
   el.querySelectorAll('[data-expand]').forEach(btn=>{
     btn.addEventListener('click',()=>{ const k=btn.getAttribute('data-expand'); expanded[k]=!expanded[k]; render(); });
   });
-  // basis explainers (v3.3): click/tap toggles the card under its band; hover assists on pointer devices only
+  // basis explainers (v3.3): click/tap PINS the card open (click again to close); on a pointer device
+  // hover gives a peek that closes when the pointer leaves the button or the card, unless pinned.
+  // A hover-opened card that is then clicked becomes pinned (never "hover opens, click closes").
   const hoverable=!!(window.matchMedia&&window.matchMedia('(hover:hover)').matches);
   el.querySelectorAll('[data-explain]').forEach(btn=>{
     const key=btn.getAttribute('data-explain');
-    btn.addEventListener('click',()=>toggleExplainer(key));
+    const card=document.getElementById('explain-'+key);
+    btn.addEventListener('click',()=>{
+      if(card&&!card.hidden&&!explainerPinned[key]){ explainerPinned[key]=true; return; }   // hover peek -> pin
+      const open=!(card&&!card.hidden);
+      toggleExplainer(key,open); explainerPinned[key]=open;
+    });
     if(hoverable){
-      btn.addEventListener('mouseenter',()=>toggleExplainer(key,true));
-      const card=document.getElementById('explain-'+key);
-      if(card) card.addEventListener('mouseleave',()=>toggleExplainer(key,false));
+      btn.addEventListener('mouseenter',()=>{ if(card&&card.hidden) toggleExplainer(key,true); });
+      const peekClose=()=>{ if(!explainerPinned[key]) toggleExplainer(key,false); };
+      btn.addEventListener('mouseleave',e=>{ if(!(card&&e.relatedTarget&&card.contains(e.relatedTarget))) peekClose(); });
+      if(card) card.addEventListener('mouseleave',peekClose);
     }
   });
 }
-// open/close one explainer card; opening one closes the other. force: true=open, false=close, undefined=toggle
+const explainerPinned={tracked:false,net:false};
+// open/close one explainer card; opening one closes (and unpins) the other. force: true=open, false=close, undefined=toggle
 function toggleExplainer(key,force){
   const card=document.getElementById('explain-'+key); if(!card) return;
   const open=force==null?card.hidden:!!force;
@@ -757,8 +789,10 @@ function toggleExplainer(key,force){
     const on=k===key?open:false;
     if(c) c.hidden=!on;
     if(b) b.setAttribute('aria-expanded',String(on));
+    if(!on) explainerPinned[k]=false;
   }
 }
+if(typeof document.addEventListener==='function') document.addEventListener('keydown',e=>{ if(e.key==='Escape'){ for(const k of ['tracked','net']) toggleExplainer(k,false); } });
 
 // ---- filters
 function setWindow(weeks){

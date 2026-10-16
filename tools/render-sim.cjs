@@ -470,10 +470,11 @@ async function main() {
     check('net: showNet true on the live feed (net cells present)', A.showNet(rrows) === true);
     check('net: two band rows, Tracked Revenue then Shopify Net Sales', (nhtml.match(/class="band/g) || []).length === 2 && nhtml.indexOf('Tracked Revenue') < nhtml.indexOf('Shopify Net Sales'));
     check('net: three net tiles Net Sales, Net MER, Returns', (nhtml.match(/class="tile net/g) || []).length === 3 && ['>Net Sales<', '>Net MER<', '>Returns<'].every(s => nhtml.includes(s)));
-    check('net: window Net Sales = sheet ALL Net Sales (column 19, independent sum)', Math.abs(NW.net - iNet) < 0.01, `${NW.net} vs ${iNet}`);
-    check('net: window Returns = sheet ALL Returns (column 23, independent sum)', Math.abs(NW.ret - iRet) < 0.01, `${NW.ret} vs ${iRet}`);
-    check('net: Net MER is sum(net)/sum(spend)', Math.abs(NW.netRoas - iNet / iSpend) < 1e-9);
-    check('net: netOf reads the stored cell, never revenue minus returns', A.netOf(newest.all) === newest.all.net && Math.abs(newest.all.net - (newest.all.revenue - newest.all.returns)) > 0.01);
+    check('net: window Net Sales = sheet ALL Net Sales (column 19, independent sum)', NW.net != null && Math.abs(NW.net - iNet) < 0.01, `${NW.net} vs ${iNet}`);
+    check('net: window Returns = sheet ALL Returns (column 23, independent sum)', NW.ret != null && Math.abs(NW.ret - iRet) < 0.01, `${NW.ret} vs ${iRet}`);
+    check('net: Net MER is sum(net)/sum(spend)', NW.netRoas != null && Math.abs(NW.netRoas - iNet / iSpend) < 1e-9);
+    check('net: netOf reads the stored cell', typeof newest.all.net === 'number' && A.netOf(newest.all) === newest.all.net && A.netOf({ revenue: 100, returns: 10 }) === null);
+    check('net: chart title and subline switch to the Net flavour', nhtml.includes('Tracked Revenue, Net Sales and Ad Spend') && !!els.subline && /Net Sales/.test(els.subline.textContent || ''));
     check('net: overview has 4 datasets, Net Sales dashed lavender on yRev', nlive.length === 1 && nlive[0].config.data.datasets.length === 4 && nlive[0].config.data.datasets.some(d => d.label === 'Net Sales' && d.yAxisID === 'yRev' && Array.isArray(d.borderDash) && d.borderColor === '#B48CF2'));
     check('net: legend names Tracked Revenue, Net Sales and Tracked MER', ['>Tracked Revenue</span>', '>Net Sales</span>', '>Tracked MER</span>'].every(s => nhtml.includes(s)));
     const abody = nlive[0] && nlive[0].config.options.plugins.tooltip.callbacks.afterBody;
@@ -481,8 +482,12 @@ async function main() {
     check('net: tooltip afterBody yields one Net MER line', Array.isArray(abOut) && abOut.length === 1 && /^Net MER \d+\.\dx$/.test(abOut[0]), JSON.stringify(abOut));
     check('net: Net explainer card present, hidden at rest, with its first line', nhtml.includes('id="explain-net" hidden') && nhtml.includes('It is the Net sales figure from your Shopify Analytics'));
     check('net: USA market card carries a Net MER stat (ms net) and a net footer', nhtml.includes('class="ms net"') && (nhtml.match(/>Net MER</g) || []).length >= 2 && / · net \$/.test(nhtml));
-    check('net: Returns tile subline reads "% of net sales"', /\d+% of net sales/.test(nhtml));
+    check('net: Returns tile subline reads "% of tracked revenue"', /\d+% of tracked revenue/.test(nhtml));
+    check('net: market stat grid carries the net class only with the band on', nhtml.includes('class="mstats mer net"') && !rhtml.includes('class="mstats mer net"'));
     A.CHANNELS.mer.netEnabled = netShipped;   // back to the shipped setting for the rest of the run
+    A.render(); await flush();
+    const offHtml = els.content ? els.content.innerHTML : '';
+    check('mer (net off): chart title, subline and footnote never mention Net Sales', netShipped || (!offHtml.includes('Net Sales') && !/Net Sales/.test((els.subline && els.subline.textContent) || '') && !/Net Sales/.test((els.footnote && els.footnote.textContent) || '')));
 
     await A.switchChannel('google'); await flush();
     check('switching back restores google rows untouched', A.channel === 'google' && A.data === gRows);
@@ -519,7 +524,13 @@ async function main() {
       // a negative Shopify net sales week (big returns in a quiet week) is printed as is, never clamped
       const neg = merRecs.map((r, i) => (i === newestIdx ? r.map((c, j) => (j === 18 ? '-500' : c)) : r));
       const { html } = await bootMer(toCsv(neg));
-      check('fixture negative net: tile prints the negative value', html.includes('this week $-500'), html.slice(html.indexOf('Net Sales'), html.indexOf('Net Sales') + 200));
+      check('fixture negative net: tile prints the negative value as -$500', html.includes('this week -$500'), html.slice(html.indexOf('Net Sales'), html.indexOf('Net Sales') + 200));
+    }
+    {
+      // the retired 2026-10-16 19-column header (USA Returns USD ...) must NOT be read as net sales: band hidden
+      const retired = merRecs.map((r, i) => (i === 0 ? [...r.slice(0, 12), 'USA Returns USD', 'CAN Returns CAD', 'AUS Returns AUD', 'USA Returns', 'CAN Returns', 'AUS Returns', 'ALL Returns'] : r.slice(0, 19)));
+      const { TA, html, t } = await bootMer(toCsv(retired));
+      check('fixture retired 19-col header: parses, band hidden, no banner', (TA.data || []).length >= 4 && TA.showNet(TA.data) === false && !html.includes('tile net') && !(t.els.banner && t.els.banner.style.display === 'block'));
     }
     {
       // the pre-v3.3 12-column contract still parses and renders (band hidden, no banner)
