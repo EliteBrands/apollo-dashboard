@@ -943,9 +943,11 @@ async function main() {
       const { t, V, clock, html } = await bootBfcm({ now: '2026-10-17T12:00:00.000Z' });
       const D = t.documentStub;
       check('fresh fixture at 08:00 Toronto: no stale banner', !/data last updated/.test(html()));
+      const chartsBefore = t.createdCharts.length;
       await clock.advance(16 * 60000);
       let n = bfUrls(t.fetchLog);
       check('fake clock +16 min: all three BFCM tabs fetched a second time', n.daily === 2 && n.config === 2 && n.log === 2, JSON.stringify(n));
+      check('a refresh with unchanged CSVs does not repaint (chart kept, open panels stay open)', t.createdCharts.length === chartsBefore, `charts ${chartsBefore} -> ${t.createdCharts.length}`);
       D.visibilityState = 'hidden';
       await clock.advance(16 * 60000);
       n = bfUrls(t.fetchLog);
@@ -968,6 +970,31 @@ async function main() {
       check('today marker uses the Toronto date (16 Oct at 23:00 Toronto)', V._state.today === '2026-10-16' && /Today · 16 Oct/.test(html()), V._state.today);
       await clock.advance(2 * 3600000);
       check('60 s timer moves the today marker past Toronto midnight', V._state.today === '2026-10-17' && /Today · 17 Oct/.test(html()), V._state.today);
+    }
+
+    {
+      // focus rule: a background refresh never repaints under a focused input inside the view (it waits for
+      // focusout); a user's own action (a picked date fires "change" while its input still has focus) paints at once
+      const { t, V, clock, bf, html } = await bootBfcm({ now: '2026-10-17T12:00:00.000Z' });
+      t.els.content.contains = () => true;
+      t.documentStub.activeElement = { tagName: 'INPUT' };
+      const before = html();
+      bf.log = bf.log.replace(/\n?$/, '\n') + '"3","2026-10-17T12:10:00.000Z","Maria","budget 2026-10","35000","70","c3d4e5f6-0718-4293-a4b5-c6d7e8f90a1b"\n';
+      await clock.advance(16 * 60000);
+      check('background refresh with new data waits while an input in the view has focus', html() === before && V._state.pendingPaint === true);
+      V.setCustom('2026-10-02', '2026-10-09');
+      check('a user date pick paints at once, focused input or not', /2 to 9 Oct/.test(html()) && V._state.pendingPaint === false && /\$35,000/.test(html()));
+      V.setSlider('spend.google', 0.2);
+      t.documentStub.activeElement = null;
+    }
+    {
+      // slider / basis actions before the first load are ignored, never a crash
+      const t = bootPage(csv, metaCsv, merCsv, { clock: makeClock('2026-10-17T12:00:00.000Z') });
+      await flush();
+      const V = t.sandbox.BFCM_VIEW;
+      let ok = true;
+      try { V.mount(t.els.content, { CHANNELS: t.sandbox.window.__apollo.CHANNELS, parseCSV: t.sandbox.window.__apollo.parseCSV, esc: t.sandbox.window.__apollo.esc, Chart: t.sandbox.Chart }); V.setSlider('spend.google', 0.5); V.setBasis('last14'); V.resetSliders(); V.unmount(); } catch (e) { ok = false; }
+      check('slider / basis / reset before the data loads do not throw', ok);
     }
 
     // ---- config edit controls (configWrites:true in the sandbox; saving arrives in Task 11)

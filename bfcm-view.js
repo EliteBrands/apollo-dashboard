@@ -84,7 +84,7 @@
       mounted: true, loaded: false, rows: [], cfg: null, dailyError: null, fetchError: null, cfgKept: false,
       window: { preset: 'sale', from: null, to: null, label: '' }, custom: null, month: null,
       sliders: neutralSliders(), unsaved: {}, today: torontoToday(), stale: null, staleKey: '', totals: null, forecast: null,
-      lastFetchAt: 0, lastOkAt: 0, pendingPaint: false,
+      lastFetchAt: 0, lastOkAt: 0, pendingPaint: false, sig: '', open: null,
     };
     el.className = '';
     el.innerHTML = '<div class="bf"><div class="loading">Loading the day-by-day sale data…</div></div>';
@@ -115,6 +115,11 @@
     S.lastFetchAt = Date.now();
     return Promise.all([get(B.dailyCsvUrl), get(B.configCsvUrl), get(B.logCsvUrl)]).then(r => {
       if (my !== gen || !S.mounted) return;
+      // nothing changed since the last load: keep the page as it is (chart, open panels); the 60 s timer
+      // still re-checks staleness and the today marker
+      const sig = r.map(o => o.err ? '!' + o.err : o.text).join('\u0000');
+      if (S.loaded && sig === S.sig) { if (!r[0].err) S.lastOkAt = Date.now(); return; }
+      S.sig = sig;
       apply(r[0], r[1], r[2]);
       paint();
     });
@@ -187,9 +192,10 @@
   const numOrNull = v => (v === '' || v == null || !isFinite(+v)) ? null : +v;
 
   // ---------------------------------------------------------------- public actions (the DOM handlers and the sim use the same ones)
-  function setPreset(name) { if (!S) return; S.window.preset = PRESETS.some(p => p[0] === name) ? name : 'sale'; S.custom = null; paint(); }
-  function setCustom(from, to) { if (!S || !isISO(from) || !isISO(to)) return; S.window.preset = 'custom'; S.custom = { from: minD(from, to), to: maxD(from, to) }; paint(); }
-  function setMonth(m) { if (!S || !S.cfg || C.saleMonths(S.cfg.saleStart, S.cfg.saleEnd).indexOf(m) < 0) return; S.month = m; paint(); }
+  // user actions paint at once (true); only background refreshes wait for a focused input
+  function setPreset(name) { if (!S) return; S.window.preset = PRESETS.some(p => p[0] === name) ? name : 'sale'; S.custom = null; paint(true); }
+  function setCustom(from, to) { if (!S || !isISO(from) || !isISO(to)) return; S.window.preset = 'custom'; S.custom = { from: minD(from, to), to: maxD(from, to) }; paint(true); }
+  function setMonth(m) { if (!S || !S.cfg || C.saleMonths(S.cfg.saleStart, S.cfg.saleEnd).indexOf(m) < 0) return; S.month = m; paint(true); }
   function setBasis(b) { if (!S) return; S.sliders.basis = (b === 'last14' || b === 'sale') ? b : 'last7'; patchForecast(true); }
   function setSlider(k, v) {
     if (!S) return;
@@ -242,10 +248,12 @@
   function onFocusOut() { if (S && S.pendingPaint) setTimeout(() => { if (S && S.mounted && S.pendingPaint && !editing()) paint(); }, 0); }
 
   // ---------------------------------------------------------------- render
-  function paint() {
+  function paint(userAction) {
     if (!S || !S.mounted || !S.loaded) return;
-    if (editing()) { S.pendingPaint = true; return; }   // never yank a control out from under the cursor
+    if (!userAction && editing()) { S.pendingPaint = true; return; }   // a background repaint never yanks a control out from under the cursor
     S.pendingPaint = false;
+    const isOpen = sel => { const n = typeof el.querySelector === 'function' ? el.querySelector(sel) : null; return !!(n && n.open); };
+    S.open = { days: isOpen('.bf-days'), targets: isOpen('.bf-targets') };   // a repaint keeps open panels open
     destroyCharts();
     S.today = torontoToday();
     S.stale = S.rows.length ? C.staleness(S.rows, new Date(Date.now())) : null;
@@ -340,7 +348,7 @@
       '<input id="bf-budget-total" type="number" data-bf="budget-total" value="' + num(b && b.total) + '" min="0" max="500000" step="100" inputmode="numeric">' +
       '<input id="bf-budget-pct" class="bf-range" type="range" data-bf="budget-pct" value="' + (b && fin(b.pct) ? b.pct : 50) + '" min="0" max="100" step="1" aria-label="Google share of the budget, percent">' +
       '<div id="bf-budget-meta">' + budgetMetaHTML() + '</div>';
-    h += '<details class="bf-targets"><summary>Targets</summary>' + [['target google_roas', 'Google ROAS', 'google_roas'], ['target meta_roas', 'Meta ROAS', 'meta_roas'], ['target mer', 'MER', 'mer']].map(k => {
+    h += '<details class="bf-targets"' + (S.open && S.open.targets ? ' open' : '') + '><summary>Targets</summary>' + [['target google_roas', 'Google ROAS', 'google_roas'], ['target meta_roas', 'Meta ROAS', 'meta_roas'], ['target mer', 'MER', 'mer']].map(k => {
       const u = S.unsaved[k[0]], v = u ? u.v : T[k[2]];
       return '<label class="bf-trow">' + k[1] + ' <input type="number" data-bf="target" data-key="' + k[0] + '" value="' + num(v) + '" min="1" max="50" step="0.1"></label>';
     }).join('') + '<div id="bf-targets-meta">' + targetsMetaHTML() + '</div></details>';
@@ -516,7 +524,7 @@
       return '<tr><td>' + dlong(d) + '</td><td>' + m$(g && g.spend) + '</td><td>' + x(g && div(g.revenue, g.spend)) + '</td><td>' + m$(m && m.spend) + '</td><td>' + x(m && div(m.revenue, m.spend)) +
         '</td><td>' + m$(s && s.revenueCad) + '</td><td>' + (s && fin(s.orders) ? s.orders : '-') + '</td><td>' + x(g && m && s ? div(s.revenueCad, g.spend + m.spend) : null) + '</td><td>' + tags.join(', ') + '</td></tr>';
     }).join('');
-    return '<details class="bf-days"><summary>Show every day as a table</summary><div class="bf-tw"><table class="bf-table"><thead><tr><th>Day</th><th>Google spend</th><th>Google ROAS</th><th>Meta spend</th><th>Meta ROAS</th><th>Store sales</th><th>Orders</th><th>MER</th><th>Notes</th></tr></thead><tbody>' + body + '</tbody></table></div></details>';
+    return '<details class="bf-days"' + (S.open && S.open.days ? ' open' : '') + '><summary>Show every day as a table</summary><div class="bf-tw"><table class="bf-table"><thead><tr><th>Day</th><th>Google spend</th><th>Google ROAS</th><th>Meta spend</th><th>Meta ROAS</th><th>Store sales</th><th>Orders</th><th>MER</th><th>Notes</th></tr></thead><tbody>' + body + '</tbody></table></div></details>';
   }
 
   // ---- band 3: forecast (play-only, never saved)
@@ -535,6 +543,7 @@
       '<div id="bf-fc-out">' + fcOutHTML() + '</div>';
   }
   function patchForecast(full) {
+    if (!S.loaded || !S.rows.length) return;   // sliders before the first load: kept in state, drawn by the first paint
     if (full) setHTML('bf-fc', fcInnerHTML()); else setHTML('bf-fc-out', fcOutHTML());
     fcLabels();
   }
