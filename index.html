@@ -267,7 +267,7 @@ const CHANNELS = {
     key:'mer', label:'Total MER', enabled:true, derived:true,   // derived: rows are built from this tab + google + meta · enabled: flip to true when the AU store is connected and the Total MER tab is backfilled
     // netEnabled (v3.3): shows the Shopify Net Sales band, tiles, chart line and market stat. Ships false; flip to true
     // once the Total MER tab carries the 11 Net Sales / Returns columns for every week. False = the page is v3.2 plus the relabel.
-    netEnabled:false,
+    netEnabled:true,   // ON since 2026-10-16: Total MER tab carries Net Sales / Returns for wk1..wk72
     csvUrl: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Total%20MER`,
     headers: [
       'Week','Date Range',

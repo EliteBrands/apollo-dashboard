@@ -483,7 +483,7 @@ async function main() {
     check('net: Net explainer card present, hidden at rest, with its first line', nhtml.includes('id="explain-net" hidden') && nhtml.includes('It is the Net sales figure from your Shopify Analytics'));
     check('net: USA market card carries a Net MER stat (ms net) and a net footer', nhtml.includes('class="ms net"') && (nhtml.match(/>Net MER</g) || []).length >= 2 && / · net \$/.test(nhtml));
     check('net: Returns tile subline reads "% of tracked revenue"', /\d+% of tracked revenue/.test(nhtml));
-    check('net: market stat grid carries the net class only with the band on', nhtml.includes('class="mstats mer net"') && !rhtml.includes('class="mstats mer net"'));
+    check('net: market stat grid carries the net class only with the band on', nhtml.includes('class="mstats mer net"') && (netShipped || !rhtml.includes('class="mstats mer net"')));
     A.CHANNELS.mer.netEnabled = netShipped;   // back to the shipped setting for the rest of the run
     A.render(); await flush();
     const offHtml = els.content ? els.content.innerHTML : '';
