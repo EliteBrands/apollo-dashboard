@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- apollo-dashboard v3.2.0 -->
+<!-- apollo-dashboard v3.3.0 -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -14,6 +14,7 @@
   :root{
     --ink:#050816; --card:#0B1B26; --border:rgba(148,163,184,.15);
     --cyan:#2AAEE0; --cyan-dim:rgba(42,174,224,.45); --amber:#C98500;
+    --net:#B48CF2; --net-dim:rgba(180,140,242,.18); --net-line:rgba(180,140,242,.35);   /* Net Sales basis ONLY (v3.3) */
     --text:#E5E9F0; --muted:#9CA3AF; --good:#3fd68f; --bad:#FF6B6B;
     --head:'Space Grotesk',Arial,sans-serif; --body:Inter,system-ui,'Segoe UI',Arial,sans-serif;
     --mono:'JetBrains Mono',Consolas,monospace;
@@ -53,6 +54,28 @@
   .tiles.meta{grid-template-columns:repeat(4,minmax(0,1fr))}
   .tiles.mer{grid-template-columns:repeat(4,minmax(0,1fr))}
   .rateline{font-size:12px;color:var(--muted);margin:8px 2px 4px}
+  /* v3.3 Total MER: two labelled band rows (Tracked basis grey, Net Sales basis lavender) + explainer cards */
+  .band{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:14px 2px 10px}
+  .band:first-child{margin-top:0}
+  .band .bl{font-family:var(--head);font-weight:600;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--net);display:inline-flex;align-items:center;gap:8px}
+  .band .bl::before{content:'';width:10px;height:10px;border-radius:3px;background:var(--net)}
+  .band .rule{flex:1;height:1px;background:var(--net-line);min-width:24px}
+  .band .bd{font-size:12px;color:var(--muted)}
+  .band.grey .bl{color:var(--muted)} .band.grey .bl::before{background:var(--muted)} .band.grey .rule{background:var(--border)}
+  .info{width:18px;height:18px;border-radius:50%;border:1px solid currentColor;background:transparent;color:inherit;font-family:var(--mono);font-size:10.5px;font-weight:600;line-height:1;display:inline-grid;place-items:center;cursor:pointer;padding:0;text-transform:none;letter-spacing:0}
+  .info:hover,.info[aria-expanded="true"]{background:currentColor}
+  .info:hover span,.info[aria-expanded="true"] span{color:var(--ink)}
+  .info:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+  .explain{border:1px solid var(--net-line);background:var(--net-dim);border-radius:14px;padding:14px 18px;font-size:13px;line-height:1.6;margin:0 0 12px}
+  .explain.grey{border-color:rgba(148,163,184,.3);background:rgba(148,163,184,.07)}
+  .explain b{font-family:var(--head);font-weight:600;font-size:13px;display:block;margin-bottom:4px}
+  .explain ul{margin:0 0 0 18px}
+  .tile.net{border-color:var(--net-line);background:linear-gradient(180deg,rgba(180,140,242,.08),var(--card) 60%)}
+  .tile.net .k{color:var(--net)}
+  .tile.net.hl{box-shadow:0 0 24px rgba(180,140,242,.12)}
+  .tile.ghost{visibility:hidden}
+  .ms.net .k{color:var(--net)} .ms.net .v{color:var(--net)}
+  .mfoot .n{color:var(--net)}
 
   .tiles{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px}
   .tile{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:16px 18px}
@@ -102,8 +125,9 @@
   /* meta cards carry 6 stats collapsed and 8 expanded - 3 and 4 columns divide both evenly, so no orphan row */
   .mkt .mstats.meta{grid-template-columns:repeat(3,minmax(0,1fr))}
   .mkt.expanded .mstats.meta{grid-template-columns:repeat(4,minmax(0,1fr))}
-  .mkt .mstats.mer{grid-template-columns:repeat(3,minmax(0,1fr))}
-  .mkt.expanded .mstats.mer{grid-template-columns:repeat(4,minmax(0,1fr))}
+  /* mer cards carry 4 stats collapsed (Spend, Tracked Revenue, Tracked MER, Net MER) and 6 expanded */
+  .mkt .mstats.mer{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .mkt.expanded .mstats.mer{grid-template-columns:repeat(6,minmax(0,1fr))}
   .ms .k{font-size:10.5px;color:var(--muted)}
   .ms .v{font-family:var(--mono);font-size:14.5px;margin-top:2px}
   .ms .d{font-size:10.5px;margin-top:1px;color:var(--muted)}
@@ -128,7 +152,9 @@
     .tile .v{font-size:19px}
     .mkt.expanded .mstats{grid-template-columns:repeat(3,minmax(0,1fr))}
     .mkt.expanded .mstats.meta{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .mkt .mstats.mer{grid-template-columns:repeat(2,minmax(0,1fr))}
     .mkt.expanded .mstats.mer{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .tile.ghost{display:none}
     .channelrow .hint{display:none}
   }
 </style>
@@ -235,6 +261,9 @@ const CHANNELS = {
   },
   mer: {
     key:'mer', label:'Total MER', enabled:true, derived:true,   // derived: rows are built from this tab + google + meta · enabled: flip to true when the AU store is connected and the Total MER tab is backfilled
+    // netEnabled (v3.3): shows the Shopify Net Sales band, tiles, chart line and market stat. Ships false; flip to true
+    // once the Total MER tab carries the 11 Net Sales / Returns columns for every week. False = the page is v3.2 plus the relabel.
+    netEnabled:false,
     csvUrl: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Total%20MER`,
     headers: [
       'Week','Date Range',
@@ -243,6 +272,13 @@ const CHANNELS = {
       'USA Revenue','CAN Revenue','AUS Revenue','ALL Revenue',
       'Orders',
     ],
+    // v3.3 columns 13..23 are read when present (Shopify's own Net sales / Returns, CAD); a sheet
+    // still on the 12-column contract parses as before and the Net band stays hidden (blank = unknown)
+    netHeaders: [
+      'USA Net Sales USD','CAN Net Sales CAD','AUS Net Sales AUD',
+      'USA Net Sales','CAN Net Sales','AUS Net Sales','ALL Net Sales',
+      'USA Returns','CAN Returns','AUS Returns','ALL Returns',
+    ],
     fields: ['spend','revenue','purchases'],
     bucketKeys: ['all','usa','can','aus'],
     buckets: [
@@ -250,11 +286,11 @@ const CHANNELS = {
       { key:'can', name:'Canada',        tag:'Google + Meta · CA store', foot:'' },
       { key:'aus', name:'Australia',     tag:'Google + Meta · AU store', foot:' · small volumes swing weekly' },
     ],
-    targetRoas: null, ratioLabel:'MER',
-    subline: 'Prepared by Elite Brands · Total MER · All figures CAD · Revenue: Shopify orders, all three stores, converted at Bank of Canada weekly rates',
-    footnote: '· Performance Marketing · Ad Spend = Google Ads + Meta Ads. MER = store revenue divided by ad spend. Revenue = Shopify orders after discounts, before shipping and tax, in CAD at Bank of Canada weekly rates. Demand Gen and multi-market spend count in the total only. A country whose store is not yet connected shows no revenue but its ad spend still counts, so Total MER reads low until it connects · Questions: reply to your weekly email',
+    targetRoas: null, ratioLabel:'Tracked MER', revLabel:'Tracked Revenue',
+    subline: 'Prepared by Elite Brands · Total MER · All figures CAD · Tracked Revenue = what the ad platforms report against · Net Sales = your Shopify Net sales, after returns',
+    footnote: '· Performance Marketing · Ad Spend = Google Ads + Meta Ads. Tracked Revenue = Shopify orders after discounts, before shipping and tax, refunds not subtracted (the basis the ad platforms report). Net Sales = the Net sales figure in your Shopify Analytics (gross sales minus discounts minus returns). Both in CAD at Bank of Canada weekly rates. Open the i beside each label for the full definition. Demand Gen and multi-market spend count in the total only · Questions: reply to your weekly email',
     noteTitle: '', byline: '',
-    chartTitle: 'Revenue, Ad Spend and MER · all markets · both channels',
+    chartTitle: 'Tracked Revenue, Net Sales and Ad Spend · all markets · both channels',
   },
 };
 let CHANNEL='google';
@@ -356,10 +392,16 @@ function loadData(text,c){
         return null;
       }
       seen.add(week);
+      // v3.3 columns are optional: read them only when the header row carries them in the contract
+      // order, else every net/returns cell is null (unknown, never 0) and the Net band stays hidden
+      const hasNet=!!(c.netHeaders&&c.netHeaders.every((hname,i)=>(hdr[c.headers.length+i]||'')===hname));
+      const nn=i=>hasNet?nullableNum(cells[i]):null;
       raw.push({ week, label:cells[1], endISO:endISO(cells[1]),
         rev:{ usa:nullableNum(cells[7]), can:nullableNum(cells[8]), aus:nullableNum(cells[9]), all:nullableNum(cells[10]) },
         fx:{ usdcad:nullableNum(cells[5]), audcad:nullableNum(cells[6]) },
-        orders:nullableNum(cells[11]) });
+        orders:nullableNum(cells[11]),
+        net:{ usa:nn(15), can:nn(16), aus:nn(17), all:nn(18) },
+        ret:{ usa:nn(19), can:nn(20), aus:nn(21), all:nn(22) } });
     }
     raw.sort((a,b)=>a.week-b.week);
     return raw;   // joined with google + meta in buildMerRows()
@@ -403,9 +445,11 @@ function buildMerRows(merRaw,googleRows,metaRows){
     // (renders "-") and a week with unknown ALL spend is dropped like a missing row
     const spend=b=>{ const gs=g[b]&&g[b].spend, ms=m[b]&&m[b].spend; return (gs==null||ms==null)?null:gs+ms; };
     if(spend('all')==null){ dropped.push(r.week); continue; }
+    // net / returns (v3.3) are the sheet's own CAD cells, Shopify's report figures: null when the
+    // column is absent or blank (unknown), never derived from revenue
     const row={ week:r.week, label:r.label, endISO:r.endISO, fx:r.fx, note:'', bullets:'', comments:{usa:'',can:'',aus:''} };
-    row.all={ spend:spend('all'), revenue:r.rev.all, purchases:r.orders };
-    for(const b of ['usa','can','aus']) row[b]={ spend:spend(b), revenue:r.rev[b], purchases:null };
+    row.all={ spend:spend('all'), revenue:r.rev.all, purchases:r.orders, net:r.net?r.net.all:null, returns:r.ret?r.ret.all:null };
+    for(const b of ['usa','can','aus']) row[b]={ spend:spend(b), revenue:r.rev[b], purchases:null, net:r.net?r.net[b]:null, returns:r.ret?r.ret[b]:null };
     rows.push(row);
   }
   if(dropped.length) console.warn(`Total MER: ${dropped.length} week(s) dropped for missing ad-tab rows: ${dropped.join(', ')}`);
@@ -421,9 +465,19 @@ function windowStats(rows,bucket){
   // Google and Meta keep their original $0 reading so those views stay byte-identical.
   const anyRev=CHANNEL!=='mer'||rows.some(r=>r[bucket].revenue!=null);
   const rev=anyRev?g('revenue'):null;
+  // Net Sales (v3.3, mer only): known for the window ONLY when every row that has revenue also has a
+  // net cell. A partial sum would understate net sales and flatter Net MER, so it is null instead.
+  const netKnown=CHANNEL==='mer'&&rev!=null&&rows.every(r=>r[bucket].revenue==null||r[bucket].net!=null);
+  const net=netKnown?g('net'):null;
+  const ret=netKnown?g('returns'):null;
   return { spend, rev, pur, nc, reach:g('reach'), clicks:g('clicks'), atc:g('atc'),
-    roas: (spend>0&&rev!=null)?rev/spend:null, cpa: pur>0?spend/pur:null, ncPct: pur>0?nc/pur:null };
+    roas: (spend>0&&rev!=null)?rev/spend:null, cpa: pur>0?spend/pur:null, ncPct: pur>0?nc/pur:null,
+    net, ret, netRoas: (netKnown&&spend>0)?net/spend:null };
 }
+// Net Sales of one bucket object (row.all, row.usa, latest.all, ...): the stored Shopify figure, never revenue minus returns
+const netOf=x=>(x&&x.net!=null)?x.net:null;
+// the Net band shows only when the switch is on AND some row in view actually carries a net cell
+const showNet=rows=>!!(ch().netEnabled&&rows.some(r=>r.all.net!=null));
 
 // ---- charts
 function niceMax(v){ if(!(v>0)) return 1; const p=Math.pow(10,Math.floor(Math.log10(v))); const n=v/p; const m=[1,1.2,1.5,2,2.5,3,4,5,6,8,10].find(s=>n<=s); return m*p; }
@@ -439,11 +493,16 @@ function makePerfChart(canvas, rows, bucket, c){
   const spendMaxData=Math.max(...spend.map(n0),0);
   if(T&&spendMaxData>revMax/T) revMax=niceMax(spendMaxData*T);  // no-clip guard (ratio-locked channels only)
   const roasMax=Math.max(T?16:4, Math.ceil(Math.max(...roas.map(n0),0)/4)*4);
+  const REV=c.revLabel||'Revenue';
   const datasets=[
       { type:'bar', label:'Spend', data:spend, backgroundColor:'rgba(42,174,224,0.45)', borderRadius:4, yAxisID:'ySpend', order:3 },
-      { type:'line', label:'Revenue', data:rev, borderColor:'#E5E9F0', backgroundColor:'#E5E9F0', borderWidth:2.5, pointRadius:3, pointHoverRadius:5, tension:.25, spanGaps:false, yAxisID:'yRev', order:1 },
+      { type:'line', label:REV, data:rev, borderColor:'#E5E9F0', backgroundColor:'#E5E9F0', borderWidth:2.5, pointRadius:3, pointHoverRadius:5, tension:.25, spanGaps:false, yAxisID:'yRev', order:1 },
       { type:'line', label:RL, data:roas, borderColor:'#C98500', backgroundColor:'#C98500', borderWidth:2, borderDash:[6,4], pointRadius:2.5, pointHoverRadius:5, tension:.25, spanGaps:false, yAxisID:'yRoas', order:2 },
   ];
+  // Net Sales (v3.3, mer only): dashed lavender on the revenue axis. Net MER is tooltip-only (afterBody)
+  // so the chart stays at four series. Net sales sits at or below tracked revenue, so revMax needs no change.
+  const withNet=c.key==='mer'&&showNet(rows);
+  if(withNet) datasets.push({ type:'line', label:'Net Sales', data:rows.map(r=>netOf(r[bucket])), borderColor:'#B48CF2', backgroundColor:'#B48CF2', borderWidth:2, borderDash:[6,5], pointRadius:2.5, pointHoverRadius:5, tension:.25, spanGaps:false, yAxisID:'yRev', order:1 });
   if(T) datasets.push({ type:'line', label:'__target', data:labels.map(()=>T), borderColor:'rgba(201,133,0,0.45)', borderWidth:1, borderDash:[3,5], pointRadius:0, pointHitRadius:0, yAxisID:'yRoas', order:4 });
   const chart=new Chart(canvas,{
     data:{ labels, datasets },
@@ -456,7 +515,7 @@ function makePerfChart(canvas, rows, bucket, c){
           backgroundColor:'#050816', borderColor:'rgba(42,174,224,0.5)', borderWidth:1,
           titleFont:{family:'Space Grotesk'}, bodyFont:{family:'JetBrains Mono'}, padding:12,
           filter:i=>i.dataset.label!=='__target',
-          itemSort:(a,b)=>{ const o={Spend:0,Revenue:1}; o[RL]=2; return (o[a.dataset.label]??9)-(o[b.dataset.label]??9); },
+          itemSort:(a,b)=>{ const o={Spend:0}; o[REV]=1; o['Net Sales']=2; o[RL]=3; return (o[a.dataset.label]??9)-(o[b.dataset.label]??9); },
           callbacks:{
             title:items=>{ const r=rows[items[0].dataIndex]; return r?'Week ending '+longEnd(r.label):''; },
             label:ctx=>{
@@ -465,6 +524,8 @@ function makePerfChart(canvas, rows, bucket, c){
               if(ctx.dataset.label===RL) return RL+' '+v.toFixed(1)+'x';
               return ctx.dataset.label+' $'+Math.round(v).toLocaleString('en-US');
             },
+            // Net MER rides along under the items (mer only); no dataset, so the chart keeps four series
+            afterBody:items=>{ if(!withNet||!items.length) return []; const r=rows[items[0].dataIndex]; const x=r&&r[bucket]; const n=netOf(x); return (x&&x.spend>0&&n!=null)?['Net MER '+(n/x.spend).toFixed(1)+'x']:[]; },
           },
         },
       },
@@ -494,7 +555,7 @@ function sparkSVG(vals){
 }
 
 // ---- rendering
-function statCell(k,v,d){ return `<div class="ms"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d||''}</div></div>`; }
+function statCell(k,v,d,cls){ return `<div class="ms${cls?' '+cls:''}"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d||''}</div></div>`; }
 
 function render(){
   const rowsAll=DATA;
@@ -536,13 +597,41 @@ function render(){
   let html='';
   if(c.key==='mer'){
     const fx=latest.fx||{};
-    html+=`<div class="tiles mer">
+    const net=showNet(rows);
+    const wkNet=netOf(wk), pvNet=netOf(pv);
+    const wkNetRoas=(wk.spend>0&&wkNet!=null)?wkNet/wk.spend:null;
+    const pvNetRoas=(pv&&pv.spend>0&&pvNet!=null)?pvNet/pv.spend:null;
+    // band 1: the tracked (ad-platform) basis, as today, relabelled; the i button drops the explainer card
+    html+=`<div class="band grey"><span class="bl">Tracked Revenue <button type="button" class="info" data-explain="tracked" aria-expanded="false" aria-controls="explain-tracked" aria-label="What is Tracked Revenue?"><span>i</span></button></span><span class="rule"></span><span class="bd">what the ad platforms report against · comparable with the Google and Meta views</span></div>
+  <div class="explain grey" id="explain-tracked" hidden><b>How Tracked Revenue is made</b><ul>
+    <li>It is the order value after discounts, before shipping and tax.</li>
+    <li>Cancelled and test orders are left out.</li>
+    <li>Refunds are not subtracted. This matches how Google and Meta report sales, so the numbers compare like for like.</li>
+    <li>USD and AUD sales are converted to CAD at the Bank of Canada weekly average rate.</li>
+    <li>Tracked MER = Tracked Revenue divided by Ad Spend (Google Ads + Meta Ads).</li>
+  </ul></div>
+  <div class="tiles mer">
     <div class="tile"><div class="k">Ad Spend</div><div class="v">${fmt$(W.spend)}</div><div class="s">this week ${fmt$(wk.spend)} ${deltaSpan(pctDelta(wk.spend,pv&&pv.spend),'none')}</div></div>
-    <div class="tile"><div class="k">Revenue</div><div class="v">${fmt$(W.rev)}</div><div class="s">this week ${fmt$(wk.revenue)} ${deltaSpan(pctDelta(wk.revenue,pv&&pv.revenue),'up')}</div></div>
-    <div class="tile hl"><div class="k" title="Store revenue per $1 of ad spend">MER</div><div class="v">${fmtX(W.roas)}</div><div class="s">this week ${fmtX(wkRoas)} ${deltaSpan(pctDelta(wkRoas,(pv&&pv.spend>0&&pv.revenue!=null)?pv.revenue/pv.spend:null),'up')}</div></div>
+    <div class="tile"><div class="k">Tracked Revenue</div><div class="v">${fmt$(W.rev)}</div><div class="s">this week ${fmt$(wk.revenue)} ${deltaSpan(pctDelta(wk.revenue,pv&&pv.revenue),'up')}</div></div>
+    <div class="tile hl"><div class="k" title="Tracked revenue per $1 of ad spend">Tracked MER</div><div class="v">${fmtX(W.roas)}</div><div class="s">this week ${fmtX(wkRoas)} ${deltaSpan(pctDelta(wkRoas,(pv&&pv.spend>0&&pv.revenue!=null)?pv.revenue/pv.spend:null),'up')}</div></div>
     <div class="tile"><div class="k">Orders</div><div class="v">${fmtI(W.pur)}</div><div class="s">this week ${fmtI(wk.purchases)} ${deltaSpan(pctDelta(wk.purchases,pv&&pv.purchases),'up')}</div></div>
-  </div>
-  ${(()=>{ const parts=[]; if(fx.usdcad!=null) parts.push('1 USD = '+fx.usdcad.toFixed(3)+' CAD'); if(fx.audcad!=null) parts.push('1 AUD = '+fx.audcad.toFixed(3)+' CAD'); return parts.length?`<div class="rateline">Rates for week ending ${longEnd(latest.label)}: ${parts.join(' · ')}</div>`:''; })()}`;
+  </div>`;
+    // band 2 (v3.3): Shopify's own Net sales. Hidden entirely while the switch is off or no row carries a net cell.
+    if(net) html+=`<div class="band"><span class="bl">Shopify Net Sales <button type="button" class="info" data-explain="net" aria-expanded="false" aria-controls="explain-net" aria-label="What is Net Sales?"><span>i</span></button></span><span class="rule"></span><span class="bd">after returns · what the store banked</span></div>
+  <div class="explain" id="explain-net" hidden><b>How Net Sales is made</b><ul>
+    <li>It is the Net sales figure from your Shopify Analytics, in CAD at the same weekly rate.</li>
+    <li>Shopify works it out as gross sales minus discounts minus returns, before shipping and tax.</li>
+    <li>Returns include refunds and cancelled orders, counted in the week they happened.</li>
+    <li>It can differ from Tracked Revenue minus Returns: cancelled orders are left out of Tracked Revenue, and Australian prices include GST that Shopify strips here.</li>
+    <li>Net MER = Net Sales divided by Ad Spend.</li>
+  </ul></div>
+  <div class="tiles mer">
+    <div class="tile net"><div class="k">Net Sales</div><div class="v">${fmt$(W.net)}</div><div class="s">this week ${fmt$(wkNet)} ${deltaSpan(pctDelta(wkNet,pvNet),'up')}</div></div>
+    <div class="tile net hl"><div class="k" title="Net sales per $1 of ad spend">Net MER</div><div class="v">${fmtX(W.netRoas)}</div><div class="s">this week ${fmtX(wkNetRoas)} ${deltaSpan(pctDelta(wkNetRoas,pvNetRoas),'up')}</div></div>
+    <div class="tile net"><div class="k">Returns</div><div class="v">${fmt$(W.ret)}</div><div class="s">${(W.net>0&&W.ret!=null)?fmtP(W.ret/W.net)+' of net sales · ':''}this week ${fmt$(wk.returns)}</div></div>
+    <div class="tile ghost" aria-hidden="true"></div>
+  </div>`;
+    html+=`${(()=>{ const parts=[]; if(fx.usdcad!=null) parts.push('1 USD = '+fx.usdcad.toFixed(3)+' CAD'); if(fx.audcad!=null) parts.push('1 AUD = '+fx.audcad.toFixed(3)+' CAD'); return parts.length?`<div class="rateline">Rates for week ending ${longEnd(latest.label)}: ${parts.join(' · ')}</div>`:''; })()}`;
   } else if(c.key==='meta'){
     // reach is a UNIQUE count, so it cannot be summed across weeks: the Reach tile
     // shows the latest week only and compares it to the week before
@@ -574,7 +663,8 @@ function render(){
       <div class="sub">tap or hover any week for exact values${c.targetRoas?' · spend bar meets the revenue line at exactly '+c.targetRoas.toFixed(1)+'x':''}</div></div>
       <div class="legend">
         <span><span class="chip" style="background:rgba(42,174,224,.55)"></span>Spend</span>
-        <span><span class="lchip" style="background:#E5E9F0"></span>Revenue</span>
+        <span><span class="lchip" style="background:#E5E9F0"></span>${c.revLabel||'Revenue'}</span>
+        ${c.key==='mer'&&showNet(rows)?'<span><span class="lchip" style="border-top:2px dashed #B48CF2"></span>Net Sales</span>':''}
         <span><span class="lchip" style="border-top:2px dashed #C98500"></span>${c.ratioLabel||'ROAS'}</span>
         ${c.targetRoas?`<span><span class="lchip" style="border-top:1px dashed rgba(201,133,0,.6)"></span>${c.targetRoas.toFixed(1)}x target</span>`:''}
       </div>
@@ -606,6 +696,12 @@ function render(){
     const dRoas=(mRoas!=null&&mpRoas!=null)?mRoas-mpRoas:null;
     const isX=expanded[B.key];
     const mNc=(m.purchases>0&&m.newcust!=null)?m.newcust/m.purchases:null;
+    // Net MER per market (v3.3, mer only): this week's stored net sales / this week's spend
+    const mNet=netOf(m), mpNet=netOf(mp);
+    const mNetRoas=(m.spend>0&&mNet!=null)?mNet/m.spend:null;
+    const mpNetRoas=(mp&&mp.spend>0&&mpNet!=null)?mpNet/mp.spend:null;
+    const merNet=c.key==='mer'&&showNet(rows);
+    const REVL=c.revLabel||'Revenue';
     html+=`<div class="mkt ${isX?'expanded':''}" id="card-${B.key}">
       <div class="mh">
         <h3>${B.name}</h3><span class="tag">${B.tag}</span>
@@ -614,18 +710,20 @@ function render(){
       </div>
       <div class="mstats${c.key==='meta'?' meta':(c.key==='mer'?' mer':'')}">
         ${statCell('Spend',fmt$(m.spend),deltaSpan(pctDelta(m.spend,mp&&mp.spend),'none'))}
-        ${statCell('Revenue',fmt$(m.revenue),deltaSpan(pctDelta(m.revenue,mp&&mp.revenue),'up'))}
-        ${c.key==='mer'?statCell('MER',fmtX(mRoas),deltaSpan(pctDelta(mRoas,mpRoas),'up')):statCell('Purchases',fmtI(m.purchases),deltaSpan(pctDelta(m.purchases,mp&&mp.purchases),'up'))}
+        ${statCell(REVL,fmt$(m.revenue),deltaSpan(pctDelta(m.revenue,mp&&mp.revenue),'up'))}
+        ${c.key==='mer'?statCell(c.ratioLabel,fmtX(mRoas),deltaSpan(pctDelta(mRoas,mpRoas),'up')):statCell('Purchases',fmtI(m.purchases),deltaSpan(pctDelta(m.purchases,mp&&mp.purchases),'up'))}
+        ${merNet?statCell('Net MER',fmtX(mNetRoas),'net sales '+fmt$(mNet)+' '+deltaSpan(pctDelta(mNetRoas,mpNetRoas),'up'),'net'):''}
         ${c.key==='mer'?'':statCell('Cost / Purchase',mCpa==null?'-':'$'+Math.round(mCpa),deltaSpan(pctDelta(mCpa,mp&&mp.purchases>0?mp.spend/mp.purchases:null),'down'))}
         ${c.key==='meta'?statCell('Link Clicks',fmtI(m.clicks),deltaSpan(pctDelta(m.clicks,mp&&mp.clicks),'up')):''}
         ${c.key==='meta'?statCell('Adds to Cart',fmtI(m.atc),deltaSpan(pctDelta(m.atc,mp&&mp.atc),'up')):''}
         ${isX?statCell((c.ratioLabel||'ROAS')+' '+rows.length+'-wk',fmtX(mW.roas),'selected period'):''}
+        ${isX&&merNet?statCell('Net MER '+rows.length+'-wk',fmtX(mW.netRoas),'selected period','net'):''}
         ${isX&&c.key==='meta'?statCell('Reach',fmtI(m.reach),'this week'):''}
         ${isX&&c.key==='google'?statCell('New Customers',fmtP(mNc),'this week'):''}
       </div>
       ${sparkSVG(rows.map(r=>r[B.key].revenue))}
       <div class="chartbox"><canvas id="chart-${B.key}" role="img" aria-label="${B.name} weekly revenue, spend and ${c.ratioLabel||'ROAS'} chart"></canvas></div>
-      <div class="mfoot">${rows.length}-week window: ${fmt$(mW.spend)} spend · ${fmt$(mW.rev)} revenue · ${fmtX(mW.roas)}${B.foot}</div>
+      <div class="mfoot">${rows.length}-week window: ${fmt$(mW.spend)} spend · ${fmt$(mW.rev)} ${c.key==='mer'?'tracked revenue':'revenue'} · ${fmtX(mW.roas)}${merNet&&mW.net!=null?`<span class="n"> · net ${fmt$(mW.net)} · ${fmtX(mW.netRoas)}</span>`:''}${B.foot}</div>
     </div>`;
   }
   html+='</div>';
@@ -638,6 +736,28 @@ function render(){
   el.querySelectorAll('[data-expand]').forEach(btn=>{
     btn.addEventListener('click',()=>{ const k=btn.getAttribute('data-expand'); expanded[k]=!expanded[k]; render(); });
   });
+  // basis explainers (v3.3): click/tap toggles the card under its band; hover assists on pointer devices only
+  const hoverable=!!(window.matchMedia&&window.matchMedia('(hover:hover)').matches);
+  el.querySelectorAll('[data-explain]').forEach(btn=>{
+    const key=btn.getAttribute('data-explain');
+    btn.addEventListener('click',()=>toggleExplainer(key));
+    if(hoverable){
+      btn.addEventListener('mouseenter',()=>toggleExplainer(key,true));
+      const card=document.getElementById('explain-'+key);
+      if(card) card.addEventListener('mouseleave',()=>toggleExplainer(key,false));
+    }
+  });
+}
+// open/close one explainer card; opening one closes the other. force: true=open, false=close, undefined=toggle
+function toggleExplainer(key,force){
+  const card=document.getElementById('explain-'+key); if(!card) return;
+  const open=force==null?card.hidden:!!force;
+  for(const k of ['tracked','net']){
+    const c=document.getElementById('explain-'+k), b=document.querySelector(`[data-explain="${k}"]`);
+    const on=k===key?open:false;
+    if(c) c.hidden=!on;
+    if(b) b.setAttribute('aria-expanded',String(on));
+  }
 }
 
 // ---- filters
@@ -733,7 +853,7 @@ function switchChannel(key){
 }
 
 // test hook for tools/render-sim.cjs (harmless in production)
-window.__apollo={ parseCSV, loadData, buildMerRows, windowStats, makePerfChart, sparkSVG, render, setWindow, switchChannel, CHANNELS,
+window.__apollo={ parseCSV, loadData, buildMerRows, windowStats, makePerfChart, sparkSVG, render, setWindow, switchChannel, CHANNELS, netOf, showNet, toggleExplainer,
   get data(){return DATA;}, set data(v){DATA=v;},
   get state(){return state;}, set state(v){state=v;},
   get expanded(){return expanded;},
