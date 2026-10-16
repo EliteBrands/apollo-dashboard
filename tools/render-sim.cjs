@@ -1256,12 +1256,77 @@ async function main() {
         const b = await boot({ post: (n, init) => { const q = JSON.parse(init.body); srv[q.key] = [q.value, '', q.who, SAVED_AT]; return answer({ ok: true, current: cur(srv) }); } });
         b.V.edit('target mer', 10); b.V.edit('target google_roas', 11);
         check('targets: the Targets panel has its own enabled Save button', saveBtn(tmeta(b.t)).some(x => !/disabled/.test(x) && />Save for everyone</.test(x)));
-        typeName(b.t, 'Glen'); clickSave(b.t, 'targets'); await flush(); await flush();
+        typeName(b.t, 'Glen'); clickSave(b.t, 'targets'); await flush(); await b.clock.advance(4000);
         const k = b.posts.map((p, i) => bodyOf(b.posts, i));
         check('targets: one POST per key, in panel order, each with a different rid',
           k.length === 2 && k[0].key === 'target google_roas' && k[1].key === 'target mer' && k[0].rid !== k[1].rid && k.every(x => UUID.test(x.rid) && x.value2 === '' && x.expect2 === ''), JSON.stringify(k));
         check('targets: expect = the saved values the edits started from (12, 11.5)', k.length === 2 && k[0].value === '11' && k[0].expect === '12' && k[1].value === '10' && k[1].expect === '11.5');
         check('targets: each target shows its own Saved line', (b.html().match(/Saved for everyone · Glen/g) || []).length >= 2 && b.V._state.cfg.targets.mer === 10 && b.V._state.cfg.targets.google_roas === 11);
+      }
+      // ---- fix round 1, I-2: a refusal on the RETRY says nothing about attempt 1 (busy / closed are decided before the
+      // rid lookup), so it stays "Not confirmed"; only changed / invalid / log full are conclusive
+      for (const [err, conclusive] of [['busy', false], ['closed', false], ['weird', false], ['changed', true], ['invalid', true], ['log full', true]]) {
+        const b = await boot({ post: n => (n === 1 ? netErr() : answer(Object.assign({ ok: false, error: err }, err === 'changed' ? { current: cur() } : {}, err === 'invalid' ? { field: 'value', reason: 'bad value' } : {}))) });
+        await saveBudget(b);
+        await b.clock.advance(5000);
+        const h = b.html() + meta(b.t);
+        if (conclusive) check('retry answered "' + err + '": a conclusive refusal, "Not saved: ... Nothing changed."', b.posts.length === 2 && /Not saved: [^<]+\. Nothing changed\./.test(h) && !/Not confirmed/.test(h));
+        else check('retry answered "' + err + '": attempt 1 is still unknown, so "Not confirmed. Reload to see what is saved." and never "Nothing changed"',
+          b.posts.length === 2 && h.includes('Not confirmed. Reload to see what is saved.') && !/Nothing changed/.test(h) && /Unconfirmed/.test(h), (h.match(/(Not saved|Not confirmed)[^<]*/) || ['(none)'])[0]);
+      }
+
+      // ---- fix round 1, I-1: ONE page-wide queue; each POST waits >= 3.5 s after the previous answer, because the
+      // server refuses a write less than 3 s after the newest row (MIN_GAP_MS)
+      const gapServer = ref => {
+        const srv = {}, times = [];
+        let last = -Infinity;
+        return {
+          times,
+          post: (n, init) => {
+            const now = ref.b.clock.now(), q = JSON.parse(init.body);
+            times.push(now);
+            if (now - last < 3000) return answer({ ok: false, error: 'busy' });
+            last = now;
+            srv[q.key] = [q.value, q.value2, q.who, new Date(now).toISOString()];
+            return answer({ ok: true, current: cur(srv) });
+          },
+        };
+      };
+      {
+        const ref = {}, gs = gapServer(ref);
+        const b = ref.b = await boot({ post: gs.post });
+        b.V.edit('target google_roas', 11); b.V.edit('target meta_roas', 13); b.V.edit('target mer', 10);
+        typeName(b.t, 'Glen'); clickSave(b.t, 'targets'); await flush();
+        const mid = tmeta(b.t);
+        check('queue: one POST at a time; the waiting targets show "Saving…"', b.posts.length === 1 && mid.includes('Meta ROAS: Saving…') && mid.includes('MER: Saving…') && saveBtn(mid).every(x => /disabled/.test(x)), `posts=${b.posts.length} ${mid.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 200)}`);
+        for (let i = 0; i < 3; i++) await b.clock.advance(4000);
+        const h = b.html(), T = b.V._state.cfg.targets;
+        check('queue: a server that enforces the 3 s gap saves all three targets (no "Not saved")',
+          b.posts.length === 3 && (h.match(/Saved for everyone · Glen/g) || []).length === 3 && !/Not saved/.test(h) && T.google_roas === 11 && T.meta_roas === 13 && T.mer === 10, `posts=${b.posts.length} ${(h.match(/(Not saved|Saved for everyone)[^<]*/g) || []).join(' | ')}`);
+        check('queue: the POSTs are at least 3.5 s apart', gs.times.length === 3 && gs.times.every((t, i) => i === 0 || t - gs.times[i - 1] >= 3500), JSON.stringify(gs.times.map(t => t - gs.times[0])));
+      }
+      {
+        // a budget save right after a target save (two clicks) shares the same queue
+        const ref = {}, gs = gapServer(ref);
+        const b = ref.b = await boot({ post: gs.post });
+        b.V.edit('target mer', 10); b.V.edit('budget 2026-10', 45000, 60);
+        typeName(b.t, 'Glen'); clickSave(b.t, 'targets'); clickSave(b.t, 'budget'); await flush();
+        check('queue: a budget save right after a target save waits its turn ("Saving…")', b.posts.length === 1 && meta(b.t).includes('Saving…'));
+        for (let i = 0; i < 2; i++) await b.clock.advance(4000);
+        const c = b.V._state.cfg;
+        check('queue: both the target and the budget save against the 3 s gap', b.posts.length === 2 && !/Not saved/.test(b.html()) && c.targets.mer === 10 && c.budgets['2026-10'].total === 45000 && c.budgets['2026-10'].pct === 60);
+      }
+      {
+        // a queued key typed back to its saved value is dropped from the queue, never stuck on "Saving…"
+        const ref = {}, gs = gapServer(ref);
+        const b = ref.b = await boot({ post: gs.post });
+        b.V.edit('target google_roas', 11); b.V.edit('target mer', 10);
+        typeName(b.t, 'Glen'); clickSave(b.t, 'targets'); await flush();
+        b.V.edit('target mer', 11.5);   // back to the saved 11.5 while queued
+        for (let i = 0; i < 2; i++) await b.clock.advance(4000);
+        // (the live #bf-targets-meta element is what the person sees; the sim's content string is the last full paint)
+        check('queue: a key typed back to the saved value while queued is skipped and its "Saving…" clears',
+          b.posts.length === 1 && !b.V._state.saving['target mer'] && !/MER: Saving/.test(tmeta(b.t)), `posts=${b.posts.length} state=${JSON.stringify(b.V._state.saving['target mer'])} meta=${tmeta(b.t).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 160)}`);
       }
       {
         // an incomplete `current` (a broken answer) is never adopted: no budget or target is wiped

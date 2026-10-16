@@ -241,17 +241,30 @@
     const who = String(S.who || '').trim();
     if (!who) { keys.forEach(k => { S.saving[k] = { state: 'needname', text: 'Type your name in the box above, then save.' }; }); patchMeta(); return Promise.resolve(false); }
     SAVER().saveName(who);
-    const my = gen;
-    return keys.reduce((p, k) => p.then(() => saveOne(k, who, my)), Promise.resolve()).then(() => true);
+    const my = gen, live = () => my === gen && S.mounted;
+    keys.forEach(k => { S.saving[k] = { state: 'saving' }; });   // queued keys read "Saving…" and their button waits
+    patchMeta();
+    const runs = keys.map(k => (saveQueue = saveQueue.then(() => pause(lastAnswerAt + SAVE_GAP_MS - Date.now())).then(() => saveOne(k, who, my))
+      .catch(() => { if (live() && inFlight(k)) { S.saving[k] = { state: 'unconfirmed' }; patchMeta(); } })));   // never stuck, never "Nothing changed"
+    return Promise.all(runs).then(() => true);
   }
+  // ONE page-wide queue: each POST waits SAVE_GAP_MS after the previous answer, because the server refuses a write less
+  // than 3 s after its newest row (MIN_GAP_MS). So several targets, or a budget right after a target, never refuse
+  // each other. The queue outlives a remount (a step from an old mount just returns), so the gap holds across it too.
+  const SAVE_GAP_MS = 3500;
+  let saveQueue = Promise.resolve(), lastAnswerAt = -Infinity;
+  const pause = ms => (ms > 0 ? new Promise(r => setTimeout(r, ms)) : Promise.resolve());
   function saveOne(key, who, my) {
-    const u = S.unsaved[key], live = () => my === gen && S.mounted;
-    if (!live() || !u) return null;
+    const live = () => my === gen && S.mounted;
+    if (!live()) return null;
+    const u = S.unsaved[key];
+    if (!u) { delete S.saving[key]; patchMeta(); return null; }   // typed back to the saved value while queued: nothing to send
     const isB = /^budget /.test(key), base = u.base.split('|'), txt = v => (v == null ? '' : String(v));
     S.saving[key] = { state: 'saving' }; patchMeta();
     // expect = the saved value this edit started from, so a change saved meanwhile by someone else is never overwritten
     return SAVER().saveKey(ctx.CHANNELS.bfcm.endpointUrl, { key, value: txt(u.v), value2: isB ? txt(u.v2) : '', expect: base[0], expect2: isB ? (base[1] || '') : '', who },
       { onRetry: () => { if (live()) { S.saving[key] = { state: 'checking' }; patchMeta(); } } }).then(r => {
+      lastAnswerAt = Date.now();   // the next queued POST waits SAVE_GAP_MS from here
       if (!live()) return;
       if (r.state === 'unconfirmed') S.saving[key] = { state: 'unconfirmed' };   // no server answer: the edit stays, marked Unconfirmed
       else {
@@ -263,7 +276,7 @@
           : { state: 'saved', at: String(last.at || ''), text: 'Saved for everyone · ' + String(last.who || who) + ' · ' + (torontoTime(last.at) || torontoTime(new Date(Date.now()).toISOString())) + ' Toronto time' };
       }
       patchMeta(); paint();   // the status shows at once; the full repaint waits while a config field has focus
-    }).catch(() => { if (live()) { S.saving[key] = { state: 'unconfirmed' }; patchMeta(); } });   // never stuck on "Saving…", never "Nothing changed"
+    }).catch(() => { lastAnswerAt = Date.now(); if (live()) { S.saving[key] = { state: 'unconfirmed' }; patchMeta(); } });   // never stuck on "Saving…", never "Nothing changed"
   }
   // the server's current values, read exactly as a page load reads the two CSV tabs (only a complete map is adopted)
   function adopt(cur) {

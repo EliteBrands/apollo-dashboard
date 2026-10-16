@@ -7,6 +7,10 @@
 (function (root) {
   'use strict';
   var TIMEOUT_MS = 15000, RETRY_DELAY_MS = 2000, NAME_KEY = 'apollo-bfcm-who';
+  // On the RETRY only these refusals settle the save: the same body can never pass (invalid), the log cannot take it
+  // (log full), or the value moved under it (changed; a landed attempt 1 would have answered duplicate first). busy and
+  // closed are decided before the rid lookup, so they say nothing about attempt 1, which may still be committing.
+  var CONCLUSIVE_ON_RETRY = { changed: 1, invalid: 1, 'log full': 1 };
   var REASON = {
     closed: 'saving is switched off right now',
     busy: 'the server is busy or the save limit was reached, please try again in a few minutes',
@@ -52,11 +56,15 @@
     var rid = newRid();
     var body = JSON.stringify({ rid: rid, key: f.key, value: f.value, value2: f.value2, expect: f.expect, expect2: f.expect2, who: f.who });
     function answered(o) { return { state: o.ok ? (o.duplicate === true ? 'duplicate' : 'saved') : 'rejected', response: o, rid: rid }; }
+    function retried(o) {
+      var settles = o.ok || (typeof o.error === 'string' && Object.prototype.hasOwnProperty.call(CONCLUSIVE_ON_RETRY, o.error));
+      return settles ? answered(o) : { state: 'unconfirmed', response: o, rid: rid };
+    }
     return post(url, body).then(answered, function () {
       if (opts && typeof opts.onRetry === 'function') opts.onRetry();
       return new Promise(function (r) { setTimeout(r, RETRY_DELAY_MS); })
         .then(function () { return post(url, body); })
-        .then(answered, function () { return { state: 'unconfirmed', rid: rid }; });
+        .then(retried, function () { return { state: 'unconfirmed', rid: rid }; });
     });
   }
 
