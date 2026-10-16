@@ -122,6 +122,41 @@ test('phases and saleMonths', () => {
   assert.deepEqual(C.saleMonths('2026-10-13', '2027-01-10').slice(-1), ['2027-01']);
 });
 
+test('check-deep L2: phases are clamped to the sale window and empty ones dropped', () => {
+  // a sale that starts after Early Access ends: no Early Access phase, BF + CM starts on the sale's first day
+  assert.deepEqual(C.phases('2026-11-27', '2026-12-06'), [
+    { key: 'bfcm', label: 'Black Friday + Cyber Monday', from: '2026-11-27', to: '2026-11-30' },
+    { key: 'ext', label: 'Extension', from: '2026-12-01', to: '2026-12-06' }]);
+  // a sale that ends on Black Friday weekend: no Extension, BF + CM stops at the sale end
+  assert.deepEqual(C.phases('2026-10-13', '2026-11-28'), [
+    { key: 'early', label: 'Early Access', from: '2026-10-13', to: '2026-11-25' },
+    { key: 'bfcm', label: 'Black Friday + Cyber Monday', from: '2026-11-26', to: '2026-11-28' }]);
+  // every phase that is kept lies inside the window and is never inverted
+  for (const [s, e] of [['2026-10-13', '2026-12-06'], ['2026-11-30', '2026-11-30'], ['2026-12-02', '2027-01-10'], ['2026-10-01', '2026-11-10']]) {
+    const ps = C.phases(s, e);
+    assert.ok(ps.length >= 1, s + '..' + e);
+    assert.ok(ps.every(p => p.from >= s && p.to <= e && p.from <= p.to), JSON.stringify(ps));
+  }
+});
+
+test('check-deep L4: resolveConfig keeps a __proto__ key as plain data (no inherited keys, no prototype change)', () => {
+  const log = [logHdr, '1,2026-10-14T01:00:00.000Z,vandal,__proto__,1,2,r1', '2,2026-10-14T02:00:00.000Z,vandal,toString,1,2,r2'].join('\n');
+  const c = C.resolveConfig(cfgCsv + '\n__proto__,9,9', log, parseCSV);
+  assert.equal(c.error, null);
+  assert.equal(Object.getPrototypeOf(c.last), null, 'last has no prototype');
+  assert.ok(Object.prototype.hasOwnProperty.call(c.last, '__proto__'), 'the __proto__ row is an own entry, not a prototype swap');
+  assert.equal(c.last.constructor, undefined, 'no inherited keys');
+  assert.deepEqual(c.budgets['2026-10'], { total: 55000, pct: 60 });
+  assert.deepEqual(c.targets, { google_roas: 12, meta_roas: 12, mer: 12 });
+});
+
+test('check-deep L6: realDate is exported (the view uses it for typed date ranges)', () => {
+  assert.equal(typeof C.realDate, 'function');
+  assert.equal(C.realDate('2026-10-02'), true);
+  assert.equal(C.realDate('2026-02-30'), false);
+  assert.equal(C.realDate('2026-10-2'), false);
+});
+
 test('REVIEW FOCUS 1: Brisbane Saturday morning is still Friday in Toronto', () => {
   assert.equal(C.torontoDate(new Date('2026-11-27T21:30:00Z')), '2026-11-27');
   // DST edge (clocks fall back 1 Nov 2026 at 06:00Z)

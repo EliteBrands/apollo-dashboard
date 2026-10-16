@@ -50,10 +50,13 @@
     return Promise.race([req, guard]).then(function (o) { clearTimeout(timer); return o; }, function (e) { clearTimeout(timer); throw e; });
   }
 
-  // f = {key, value, value2, expect, expect2, who}, all strings. opts.onRetry() runs when the first try had no answer.
+  // f = {key, value, value2, expect, expect2, who}, all strings, plus an optional f.rid: the rid of an earlier save of
+  // the SAME change that ended "Not confirmed" (the view passes it back, so a save that did land answers duplicate).
+  // opts.onRetry() runs when the first try had no answer.
   // -> Promise<{state: 'saved' | 'duplicate' | 'rejected' | 'unconfirmed', response?, rid}>
+  var RID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   function saveKey(url, f, opts) {
-    var rid = newRid();
+    var rid = typeof f.rid === 'string' && RID_RE.test(f.rid) ? f.rid : newRid();
     var body = JSON.stringify({ rid: rid, key: f.key, value: f.value, value2: f.value2, expect: f.expect, expect2: f.expect2, who: f.who });
     function answered(o) { return { state: o.ok ? (o.duplicate === true ? 'duplicate' : 'saved') : 'rejected', response: o, rid: rid }; }
     function retried(o) {

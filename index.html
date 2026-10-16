@@ -173,10 +173,11 @@
   .bf{display:flex;flex-direction:column;gap:18px;min-width:0}
   .bf-alerts{display:contents}   /* patchable wrapper: its banners sit in the .bf column as before, an empty one adds no gap */
   .bf-alert{border:1px solid var(--bad);background:rgba(255,107,107,.08);border-radius:12px;padding:12px 16px;font-size:13px}
-  .bf-stale{border:1px solid var(--sale-line);background:var(--sale-dim);border-radius:12px;padding:10px 16px;font-size:13px}
+  .bf-info{border:1px solid var(--border);border-radius:12px;padding:12px 16px;font-size:13px;color:var(--muted)}   /* neutral note: not started yet, sale ended */
+  .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}  .bf-stale{border:1px solid var(--sale-line);background:var(--sale-dim);border-radius:12px;padding:10px 16px;font-size:13px}
   .bf-stale b{color:var(--sale);font-weight:600}
   .bf-stalenote{color:var(--sale)}
-  .bf-phase{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border:1px solid var(--border);border-radius:12px;overflow:hidden}
+  .bf-phase{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);border:1px solid var(--border);border-radius:12px;overflow:hidden}   /* one column per phase (a short sale drops one) */
   .bf-ph{padding:9px 12px;font-size:12px;color:var(--muted);text-align:center;line-height:1.35}
   .bf-ph+.bf-ph{border-left:1px solid var(--border)}
   .bf-ph b{display:block;font-family:var(--head);font-weight:600;font-size:12.5px;color:var(--text)}
@@ -208,7 +209,7 @@
   .bf-split{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:12.5px}
   .bf-sw{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
   .bf-sw.g{background:var(--bf-g)} .bf-sw.m{background:var(--bf-m)} .bf-sw+.bf-sw{margin-left:-3px}
-  .bf-note{font-size:12px;color:var(--muted);line-height:1.55}
+  .bf-note{font-size:12px;color:var(--muted);line-height:1.55;overflow-wrap:anywhere}
   .bf-cap{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px}
   .bf-bar{margin:10px 0 14px}
   .bf-bh{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:13px}
@@ -225,8 +226,8 @@
   .bf-unsaved{display:inline-block;font-size:11px;font-weight:600;color:var(--sale);border:1px solid var(--sale-line);border-radius:999px;padding:1px 9px;margin-right:6px}
   .bf-newer{font-size:12px;color:var(--sale)}
   .bf-save{font-family:var(--head);font-weight:600;font-size:12.5px;border-radius:999px;padding:7px 16px;border:1px solid var(--sale);background:var(--sale);color:var(--ink);cursor:pointer;align-self:flex-start}
-  .bf-save[disabled]{opacity:.45;cursor:not-allowed}
-  .bf-status{font-size:12px;line-height:1.5;color:var(--text)}
+  .bf-save[disabled],.bf-save[aria-disabled="true"]{opacity:.45;cursor:not-allowed}   /* aria-disabled keeps the button focusable */
+  .bf-status{font-size:12px;line-height:1.5;color:var(--text);overflow-wrap:anywhere}
   .bf-st-saved{color:var(--good)} .bf-st-rejected,.bf-st-unconfirmed{color:var(--bad)} .bf-st-checking,.bf-st-needname{color:var(--sale)}
   .bf-range{width:100%;accent-color:var(--sale)}
   .bf-targets summary{cursor:pointer;font-size:12px;color:var(--muted)}
@@ -252,7 +253,7 @@
   .bf-ftile .v{font-size:20px}
   .bf-basis{color:var(--muted)}
   @media (max-width:980px){ .bf-tiles{grid-template-columns:repeat(2,minmax(0,1fr))} .bf-budget,.bf-fc{grid-template-columns:minmax(0,1fr)} }
-  @media (max-width:600px){ .bf-out{grid-template-columns:minmax(0,1fr)} .bf-wl{margin-left:0;flex-basis:100%} .bf-chartbox{height:380px} .bf-budget,.bf-fc{padding:16px} .bf-ph{padding:8px 6px;font-size:11px} .bf-ph b{font-size:11.5px} }
+  @media (max-width:600px){ .bf-out{grid-template-columns:minmax(0,1fr)} .bf-wl{margin-left:0;flex-basis:100%} .bf-chartbox{height:380px} .bf-budget,.bf-fc{padding:16px} .bf-ph{padding:8px 6px;font-size:11px} .bf-ph b{font-size:11.5px} #bf-t-sale{grid-column:1/-1} .bf-pre,.bf-save{min-height:40px} }
 </style>
 </head>
 <body>
@@ -292,6 +293,7 @@
   </div>
 
   <div id="content" class="loading">Loading live data…</div>
+  <div id="bf-live" class="sr-only" role="status" aria-live="polite"></div>
 
   <footer>
     <b>Elite Brands</b>
@@ -300,7 +302,8 @@
   </footer>
 </div>
 
-<script src="bfcm-core.js?v=4.0.0"></script><script src="bfcm-view.js?v=4.0.0"></script><script src="bfcm-save.js?v=4.0.0"></script>
+<!-- cache-buster: bump all three together on ANY bfcm-*.js change (one ?v= value for the three files) -->
+<script src="bfcm-core.js?v=4.0.1"></script><script src="bfcm-view.js?v=4.0.1"></script><script src="bfcm-save.js?v=4.0.1"></script>
 <script>
 const SHEET_ID = '1IqcF3hZNmtBlsffVi7y9jToIVGbHyWsDuT6os5wHAt0';   // config.json dashboard_sheet_id
 const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Sheet1`;   // google (kept for the sim's URL check)
@@ -398,8 +401,8 @@ const CHANNELS = {
   },
   // v4 BFCM 2026: day-by-day sale view (bfcm-core.js + bfcm-view.js + bfcm-save.js). enabled = the launch switch (pill +
   // #bfcm deep link); configWrites shows the budget / target edit controls; endpointUrl = the config endpoint's Apps Script
-  // /exec URL (clients/apollo-scooters/apps-script/bfcm-config.gs). While it is '' the Save buttons stay disabled ("Saving
-  // is not switched on yet"). configWrites hides controls only: the server's WRITES_ENABLED is the real switch.
+  // /exec URL (clients/apollo-scooters/apps-script/bfcm-config.gs). While it is '' the budget block stays read-only (no
+  // edit controls). configWrites hides controls only: the server's WRITES_ENABLED is the real switch.
   bfcm: { key:'bfcm', label:'BFCM 2026', enabled:false, configWrites:false, endpointUrl:'',
     // headers=1: the first row is the header row (gviz otherwise guesses, and can fold data rows into the header)
     dailyCsvUrl: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&headers=1&sheet=BFCM%20Daily`,
@@ -1013,7 +1016,8 @@ function openBfcm(){
   const hm=document.getElementById('headmeta'); if(hm) hm.style.display='none';
   const content=document.getElementById('content');
   if(typeof BFCM_VIEW==='undefined'||typeof BFCM_CORE==='undefined'){ content.className='loading'; content.textContent='The BFCM view did not load. Please refresh the page.'; return Promise.resolve(); }
-  return BFCM_VIEW.mount(content,{CHANNELS,parseCSV,esc,Chart});
+  // Chart.js comes from a CDN: when it did not load, the view shows its figures without the chart (never a ReferenceError)
+  return BFCM_VIEW.mount(content,{CHANNELS,parseCSV,esc,Chart:typeof Chart==='function'?Chart:null});
 }
 function closeBfcm(){
   if(typeof BFCM_VIEW!=='undefined') BFCM_VIEW.unmount();   // stops every BFCM timer
@@ -1035,12 +1039,22 @@ window.__apollo={ parseCSV, loadData, buildMerRows, windowStats, makePerfChart, 
 (function boot(){
   const deep=(typeof location!=='undefined'&&(location.hash||'').replace('#','').toLowerCase())||'';
   const wantChannel=(deep==='meta'||deep==='mer'||deep==='bfcm')&&CHANNELS[deep].enabled?deep:null;   // a disabled channel's deep link is ignored
-  if(!CHANNELS.meta.enabled){ const cr=document.getElementById('channelrow'); if(cr) cr.style.display='none'; }
+  // the channel row hides only when Google is the only view
+  const otherOn=Object.keys(CHANNELS).some(k=>k!=='google'&&CHANNELS[k].enabled);
+  if(!otherOn){ const cr=document.getElementById('channelrow'); if(cr) cr.style.display='none'; }
   // a disabled non-default channel keeps its pill out of the row (same pattern as the channelrow hide above)
   for(const k of Object.keys(CHANNELS)){ if(k==='google'||CHANNELS[k].enabled) continue; const b=document.getElementById('ch-'+k); if(b) b.style.display='none'; }
-  // the hint describes the pills that are actually on screen
-  if(CHANNELS.mer.enabled){ const h=document.getElementById('channelhint'); if(h) h.textContent='Three views, one report. Each ad channel counts its own sales. Total MER counts all store sales against all ad spend.'; }
-  if(CHANNELS.mer.enabled&&CHANNELS.bfcm.enabled){ const h=document.getElementById('channelhint'); if(h) h.textContent='Four views, one report. Each ad channel counts its own sales. Total MER counts all store sales against all ad spend. BFCM 2026 follows the sale day by day.'; }
+  // the hint describes the pills that are actually on screen: it counts the enabled views and names what each adds
+  // (Google + Meta keeps the shipped wording; the Google + Meta + Total MER and four-view wordings are unchanged)
+  if(otherOn){
+    const on=Object.keys(CHANNELS).filter(k=>CHANNELS[k].enabled), n=on.length, words=['One','Two','Three','Four','Five','Six'];
+    const solo=n===2&&CHANNELS.meta.enabled;
+    const parts=[(words[n-1]||String(n))+' views, one report.'];
+    if(CHANNELS.meta.enabled) parts.push(solo?'Each channel counts its own sales.':'Each ad channel counts its own sales.');
+    if(CHANNELS.mer.enabled) parts.push('Total MER counts all store sales against all ad spend.');
+    if(CHANNELS.bfcm.enabled) parts.push('BFCM 2026 follows the sale day by day.');
+    const h=document.getElementById('channelhint'); if(h) h.textContent=parts.join(' ');
+  }
   fetchChannel('google').then(rows=>{
     STORE.google=rows;
     wireControls();
@@ -1048,8 +1062,8 @@ window.__apollo={ parseCSV, loadData, buildMerRows, windowStats, makePerfChart, 
       DATA=rows; setWindow(8);
       document.getElementById('controls').style.visibility='visible';   // only after a successful first render
     }
-    // the channel row is NOT gated on google: a broken google feed must still let meta be opened
-    if(CHANNELS.meta.enabled) document.getElementById('channelrow').style.visibility='visible';
+    // the channel row is NOT gated on google: a broken google feed must still let another view be opened
+    if(otherOn) document.getElementById('channelrow').style.visibility='visible';
     showChannel();
     if(wantChannel) switchChannel(wantChannel);
   });

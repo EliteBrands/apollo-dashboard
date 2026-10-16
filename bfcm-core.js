@@ -13,6 +13,8 @@
   var CONFIG_HEADERS = ['Key', 'Value', 'Value 2'];
   var LOG_HEADERS = ['Seq', 'At', 'Who', 'Key', 'Value', 'Value 2', 'Request ID'];
 
+  // the blank-target default 12 MUST equal TARGET_DEFAULT in clients/apollo-scooters/apps-script/bfcm-config.gs (the
+  // endpoint compares a save's expect against it; a mismatch makes every first save of a blank target read "changed")
   var DEFAULTS = { saleStart: '2026-10-13', saleEnd: '2026-12-06', google_roas: 12, meta_roas: 12, mer: 12 };
   var SALE_END_MAX = '2027-01-31';   // the page and the daily task both stop by then
   var SALE_DATES_ERROR = 'Sale dates in the settings are not valid';
@@ -66,12 +68,14 @@
   }
 
   // ---- phases / months
+  // each phase clamped to the sale window; a phase the window does not reach is left out (never an inverted range)
   function phases(saleStart, saleEnd) {
     return [
       { key: 'early', label: 'Early Access', from: saleStart, to: '2026-11-25' },
       { key: 'bfcm', label: 'Black Friday + Cyber Monday', from: '2026-11-26', to: '2026-11-30' },
       { key: 'ext', label: 'Extension', from: '2026-12-01', to: saleEnd }
-    ];
+    ].map(function (p) { return { key: p.key, label: p.label, from: maxDate(p.from, saleStart), to: minDate(p.to, saleEnd) }; })
+      .filter(function (p) { return p.from <= p.to; });
   }
   function saleMonths(saleStart, saleEnd) {
     var out = [], y = +saleStart.slice(0, 4), m = +saleStart.slice(5, 7);
@@ -121,8 +125,9 @@
     if (!cfgRecs || !cfgRecs.length || !checkHeader(cfgRecs[0], CONFIG_HEADERS, false)) return failed('BFCM Config header does not match');
     if (!logRecs || !logRecs.length || !checkHeader(logRecs[0], LOG_HEADERS, false)) return failed('BFCM Config Log header does not match');
 
-    var vals = {};   // key -> {v, v2}
-    var last = {};
+    // keys come from the sheet, so these maps have no prototype: a '__proto__' or 'toString' row is plain data
+    var vals = Object.create(null);   // key -> {v, v2}
+    var last = Object.create(null);
     cfgRecs.slice(1).forEach(function (r) { if (r[0]) vals[r[0]] = { v: r[1] || '', v2: r[2] || '' }; });
     var logRows = logRecs.slice(1).filter(function (r) { return r[3]; });
     var seqOk = logRows.every(function (r) { return num(r[0]) != null; });
@@ -423,7 +428,7 @@
 
   return {
     DAILY_HEADERS: DAILY_HEADERS, CONFIG_HEADERS: CONFIG_HEADERS, LOG_HEADERS: LOG_HEADERS, SALE_DATES_ERROR: SALE_DATES_ERROR,
-    phases: phases, saleMonths: saleMonths, parseDaily: parseDaily, resolveConfig: resolveConfig, torontoDate: torontoDate,
+    phases: phases, saleMonths: saleMonths, parseDaily: parseDaily, resolveConfig: resolveConfig, torontoDate: torontoDate, realDate: realDate,
     presetRange: presetRange, completeThrough: completeThrough, windowTotals: windowTotals, pacing: pacing,
     weekProjection: weekProjection, staleness: staleness, lagTag: lagTag,
     addDays: addDays, daysBetween: daysBetween, eachDay: eachDay,

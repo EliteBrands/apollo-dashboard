@@ -247,10 +247,11 @@ async function main() {
   fs.unlinkSync(tmp);
   check('page script passes node --check', syntaxOK);
   {
-    // v4: the page loads bfcm-core.js + bfcm-view.js + bfcm-save.js (cache-busted ?v=4.0.0) BEFORE the inline script
+    // v4: the page loads bfcm-core.js + bfcm-view.js + bfcm-save.js (cache-busted, all three on ONE ?v= value) BEFORE
+    // the inline script; check-deep L15: bumped together to ?v=4.0.1, with the "bump all three together" comment above
     const parts = pageParts(PAGE);
-    check('page loads bfcm-core.js, bfcm-view.js and bfcm-save.js (?v=4.0.0) before the inline script',
-      /<script src="bfcm-core\.js\?v=4\.0\.0"><\/script>\s*<script src="bfcm-view\.js\?v=4\.0\.0"><\/script>\s*<script src="bfcm-save\.js\?v=4\.0\.0"><\/script>\s*<script>/.test(html) && parts.srcs.join() === 'bfcm-core.js,bfcm-view.js,bfcm-save.js');
+    check('page loads bfcm-core.js, bfcm-view.js and bfcm-save.js (?v=4.0.1, one unit, with the bump comment) before the inline script',
+      /<!-- [^>]*bump all three together on ANY bfcm-\*\.js change[^>]*-->\s*<script src="bfcm-core\.js\?v=4\.0\.1"><\/script>\s*<script src="bfcm-view\.js\?v=4\.0\.1"><\/script>\s*<script src="bfcm-save\.js\?v=4\.0\.1"><\/script>\s*<script>/.test(html) && parts.srcs.join() === 'bfcm-core.js,bfcm-view.js,bfcm-save.js');
     for (const f of ['bfcm-core.js', 'bfcm-view.js', 'bfcm-save.js']) {
       let ok = true;
       try { execFileSync(process.execPath, ['--check', path.join(parts.dir, f)], { stdio: 'pipe' }); } catch (e) { ok = false; }
@@ -834,7 +835,9 @@ async function main() {
       TA.CHANNELS.bfcm.enabled = true;
       await TA.switchChannel('bfcm'); await flush();
     }
-    return { t, TA, V, clock, bf, posts: t.postLog, html: () => String(t.els.content.innerHTML || '') };
+    // html(): the view's text with the <bdi> isolation tags around typed names removed (check-deep L3), so the text checks
+    // read as before; the L3 checks read t.els.content.innerHTML raw
+    return { t, TA, V, clock, bf, posts: t.postLog, html: () => String(t.els.content.innerHTML || '').replace(/<\/?bdi>/g, '') };
   };
   // the text of one pacing bar (Google / Meta / Both) inside #bf-pace, never the tiles or the forecast
   const paceBars = h => {
@@ -878,7 +881,7 @@ async function main() {
       if (!on) { TA.CHANNELS.bfcm.enabled = true; await TA.switchChannel('bfcm'); await flush(); }
       const sh = String(t.els.content.innerHTML || ''), btns = sh.match(/<button[^>]*data-bf="save"[^>]*>[^<]*<\/button>/g) || [];
       if (!B.configWrites) check('configWrites:false as shipped: no Save button and no edit controls', !btns.length && !/data-bf="budget-total"/.test(sh));
-      else if (B.endpointUrl === '') check('configWrites:true with endpointUrl empty: every Save button disabled, "Saving is not switched on yet"', btns.length >= 1 && btns.every(x => /disabled/.test(x) && />Saving is not switched on yet</.test(x)), btns.join(' | '));
+      else if (B.endpointUrl === '') check('configWrites:true with endpointUrl empty: the read-only budget block, no edit controls, no Save button (check-deep M7)', !btns.length && !/data-bf="budget-total"/.test(sh) && !/switched on/.test(sh), btns.join(' | '));
       else check('configWrites:true with an /exec endpointUrl: "Save for everyone" (disabled until an edit) and the name box', btns.length >= 1 && btns.every(x => />Save for everyone</.test(x) && /disabled/.test(x)) && /data-bf="who"/.test(sh), btns.join(' | '));
       await TA.switchChannel('google'); await flush();
     }
@@ -941,7 +944,8 @@ async function main() {
       check('recent-day tags: Google "may still rise", Meta "filling in"', /may still rise/.test(h) && /filling in/.test(h));
       check('no expected-landed scale-up wording (D1)', !/expected|lag included/i.test(h));
       // weekly table: Mon-Sun Toronto weeks, current week + projected run-rate row
-      check('weekly table: Mon-Sun week row for 12 to 18 Oct clipped to 13 to 16 Oct, plus a projected run-rate row', /13 to 16 Oct/.test(h) && /projected full week/.test(h) && /run-rate/.test(h));
+      check('weekly table: Mon-Sun week row for 12 to 18 Oct clipped to 13 to 16 Oct, plus a projected row in plain words (check-deep L13)',
+        /13 to 16 Oct/.test(h) && /projected full week 12 to 18 Oct, if spend stays at the last-7-day pace/.test(h) && !/run-rate:|ratios as so far/.test(h));
 
       // band 1: read-only budget (configWrites:false)
       check('configWrites:false: no edit controls, no Save button', !/data-bf="budget-total"/.test(h) && !/Save for everyone/.test(h) && !/data-bf="target"/.test(h));
@@ -982,7 +986,7 @@ async function main() {
 
       // band 3 forecast: play-only, deterministic, bounded, never "unsaved"
       const fo = () => String((t.els['bf-fc-out'] && t.els['bf-fc-out'].innerHTML) || '');
-      check('forecast outputs render, each with its basis line', /Based on/.test(h) && /spend lands at/.test(h) && /Store revenue lands at/.test(h) && /Sale MER lands at/.test(h) && /Google-reported revenue/.test(h) && /Meta-reported revenue/.test(h) && /Spend ceiling/.test(h));
+      check('forecast outputs render, each with its basis line', /Based on/.test(h) && /spend lands at/.test(h) && /Store revenue lands at/.test(h) && /Sale MER lands at/.test(h) && /Google-reported revenue/.test(h) && /Meta-reported revenue/.test(h) && /Daily spend that would still meet the MER target/.test(h) && !/Spend ceiling/.test(h));
       check('platform revenues shown separately, never summed', !/Google \+ Meta revenue|combined platform revenue/i.test(h));
       V.setSlider('spend.google', 0.5); const a1 = fo();
       V.setSlider('spend.google', 0.5); const a2 = fo();
@@ -1125,9 +1129,10 @@ async function main() {
       t.documentStub.activeElement = { tagName: 'INPUT', type: 'range', getAttribute: k => (k === 'data-bf' ? 'slider' : null) };
       bf.daily = bf.daily.replace('"2026-10-16","876.00"', '"2026-10-16","999.00"');
       await clock.advance(4.5 * 3600000);   // several refreshes, and past 16:05Z when Meta turns 30 h old
-      const h = html();
+      const h = html(), al = String((t.els['bf-alerts'] && t.els['bf-alerts'].innerHTML) || '');
       check('focused forecast slider: the refresh still paints the new data', h.includes('$999'));
-      check('focused forecast slider: the stale banner still appears past 30 h', /Meta data last updated 16 Oct, 6:05 am Toronto time/.test(h));
+      // check-deep L7: the 60 s timer's own repaint waits while a slider has focus, but the alerts area is always current
+      check('focused forecast slider: the stale banner still appears past 30 h (in the alerts area)', /Meta data last updated 16 Oct, 6:05 am Toronto time/.test(al), al.slice(0, 160));
       t.documentStub.activeElement = null;
     }
     {
@@ -1167,9 +1172,9 @@ async function main() {
       check('slider / basis / reset before the data loads do not throw', ok);
     }
 
-    // ---- config edit controls (configWrites:true in the sandbox; endpointUrl stays '' as shipped)
+    // ---- config edit controls (configWrites:true and an endpoint in the sandbox; without an endpoint the block is read-only, M7)
     {
-      const { V, clock, bf, html } = await bootBfcm({ now: '2026-10-17T12:00:00.000Z', configWrites: true });
+      const { V, clock, bf, html } = await bootBfcm({ now: '2026-10-17T12:00:00.000Z', configWrites: true, endpoint: 'https://script.google.com/macros/s/SIM-TEST/exec' });
       const h = html();
       check('configWrites:true: budget total, split slider, Save button and Targets panel render', /data-bf="budget-total"/.test(h) && /data-bf="budget-pct"/.test(h) && /data-bf="save"/.test(h) && /data-bf="target"/.test(h) && /Targets/.test(h));
       check('controls show the current values (log over defaults)', /data-bf="budget-total"[^>]*value="32000"/.test(h) && /data-bf="budget-pct"[^>]*value="70"/.test(h));
@@ -1204,8 +1209,8 @@ async function main() {
       };
       const SAVED_AT = '2026-10-17T12:00:01.000Z';   // 8:00 am Toronto
       const okBudget = (who, extra) => answer(Object.assign({ ok: true, current: cur({ 'budget 2026-10': ['45000', '60', who || 'Glen', SAVED_AT] }) }, extra || {}));
-      const meta = t => String((t.els['bf-budget-meta'] && t.els['bf-budget-meta'].innerHTML) || '');
-      const tmeta = t => String((t.els['bf-targets-meta'] && t.els['bf-targets-meta'].innerHTML) || '');
+      const meta = t => String((t.els['bf-budget-meta'] && t.els['bf-budget-meta'].innerHTML) || '').replace(/<\/?bdi>/g, '');
+      const tmeta = t => String((t.els['bf-targets-meta'] && t.els['bf-targets-meta'].innerHTML) || '').replace(/<\/?bdi>/g, '');
       const fire = (t, ev, target) => (t.els.content._listeners[ev] || []).forEach(fn => fn({ target }));
       const typeName = (t, name) => fire(t, 'input', { getAttribute: k => (k === 'data-bf' ? 'who' : null), value: name });
       const clickSave = (t, scope) => fire(t, 'click', { closest: () => ({ getAttribute: k => (k === 'data-bf' ? 'save' : k === 'data-v' ? scope : null) }) });
@@ -1216,12 +1221,13 @@ async function main() {
       const saveBudget = async (b, name) => { b.V.edit('budget 2026-10', 45000, 60); typeName(b.t, name == null ? 'Glen' : name); clickSave(b.t, 'budget'); await flush(); };
 
       {
-        // shipped: endpointUrl '' -> the button says so, is disabled, and nothing is ever posted
+        // endpointUrl '' (check-deep M7): saving is not possible, so the budget block is read-only (no edit controls, no
+        // Save button, no name box), edit() is refused and nothing is ever posted
         const b = await bootBfcm({ now: '2026-10-17T12:00:00.000Z', configWrites: true });
-        b.V.edit('budget 2026-10', 45000, 60);
+        const ed = b.V.edit('budget 2026-10', 45000, 60);
         const btn = saveBtn(meta(b.t)).concat(saveBtn(b.html()));
-        check('endpointUrl empty: Save button disabled with "Saving is not switched on yet", no name box',
-          btn.length >= 1 && btn.every(x => /disabled/.test(x) && />Saving is not switched on yet</.test(x)) && !/Save for everyone/.test(meta(b.t) + b.html()) && !/data-bf="who"/.test(b.html()), btn.join(' | '));
+        check('endpointUrl empty: read-only budget block, no Save button, no name box, edit() refused',
+          !btn.length && !/data-bf="budget-total"/.test(b.html()) && !/data-bf="who"/.test(b.html()) && /\$32,000/.test(b.html()) && ed === false && !Object.keys(b.V._state.unsaved).length, btn.join(' | '));
         typeName(b.t, 'Glen'); clickSave(b.t, 'budget'); await flush();
         const r = typeof b.V.save === 'function' ? await b.V.save('budget') : 'no save()';
         check('endpointUrl empty: a click or save() posts nothing', b.posts.length === 0 && r === false, String(r));
@@ -1273,7 +1279,8 @@ async function main() {
         const b = await boot({ post: () => answer({ ok: false, error: 'busy' }) });
         await saveBudget(b);
         const h = b.html();
-        check('busy: "Not saved: ... Nothing changed." and the control reverts to the saved value (32000)', /Not saved: [^<]+\. Nothing changed\./.test(h) && /data-bf="budget-total"[^>]*value="32000"/.test(h) && !/Unsaved/.test(h));
+        // check-deep L11: busy is a transient refusal, so the typed edit stays (only changed / invalid / log full revert)
+        check('busy: "Not saved: ... Nothing changed." and the control keeps the typed value (45000, Unsaved)', /Not saved: [^<]+\. Nothing changed\./.test(h) && /data-bf="budget-total"[^>]*value="45000"/.test(h) && /Unsaved/.test(h));
       }
       {
         // network error, then the retry is answered: ONE retry, the SAME rid (same body), then Saved
@@ -1444,6 +1451,390 @@ async function main() {
         b.V.edit('budget 2026-10', 45000, 60); typeName(b.t, 'Glen'); clickSave(b.t, 'budget');
         await b.TA.switchChannel('google'); await flush(); await flush();
         check('leaving mid-save: the weekly view is untouched by the late answer', b.TA.channel === 'google' && !/Saved for everyone/.test(b.html()));
+      }
+    }
+
+    // ================================================================ /check-deep pass 1 fixes (each check failed first)
+    section('bfcm check-deep fixes (pass 1)');
+    {
+      const EP = 'https://script.google.com/macros/s/SIM-TEST/exec';
+      const SAVED_AT = '2026-10-17T12:00:01.000Z';   // 8:00 am Toronto
+      const answer = o => Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify(o)) });
+      const netErr = () => Promise.reject(new TypeError('Failed to fetch'));
+      const curOf = over => {
+        const c = {
+          sale_start: ['2026-10-13', '', '', ''], sale_end: ['2026-12-06', '', '', ''],
+          'budget 2026-10': ['32000', '70', 'Mac O\'Neil "Mac"', '2026-10-15T14:00:00.000Z'], 'budget 2026-11': ['60000', '65', '', ''], 'budget 2026-12': ['', '', '', ''],
+          'target google_roas': ['12', '', '', ''], 'target meta_roas': ['12', '', '', ''], 'target mer': ['11.5', '', '<img src=x onerror=alert(1)>', '2026-10-16T13:30:00.000Z'],
+        };
+        Object.assign(c, over || {});
+        const out = {};
+        Object.keys(c).forEach(k => { out[k] = { value: c[k][0], value2: c[k][1], who: c[k][2], at: c[k][3] }; });
+        return out;
+      };
+      const ok45 = () => answer({ ok: true, current: curOf({ 'budget 2026-10': ['45000', '60', 'Glen', SAVED_AT] }) });
+      const fire = (t, ev, target) => (t.els.content._listeners[ev] || []).forEach(fn => fn({ target }));
+      const typeName = (t, name) => fire(t, 'input', { getAttribute: k => (k === 'data-bf' ? 'who' : null), value: name });
+      const clickSave = (t, scope) => fire(t, 'click', { closest: () => ({ getAttribute: k => (k === 'data-bf' ? 'save' : k === 'data-v' ? scope : null) }) });
+      const bodyOf = (posts, i) => { try { return JSON.parse(posts[i].init.body); } catch (e) { return {}; } };
+      const rawMeta = t => String((t.els['bf-budget-meta'] && t.els['bf-budget-meta'].innerHTML) || '');
+      const meta = t => rawMeta(t).replace(/<\/?bdi>/g, '');
+      const tmeta = t => String((t.els['bf-targets-meta'] && t.els['bf-targets-meta'].innerHTML) || '').replace(/<\/?bdi>/g, '');
+      const boot = o => bootBfcm(Object.assign({ now: '2026-10-17T12:00:00.000Z', configWrites: true, endpoint: EP }, o || {}));
+      const saveBudget = async (b, v, v2) => { b.V.edit('budget 2026-10', v == null ? 45000 : v, v2 == null ? 60 : v2); typeName(b.t, 'Glen'); clickSave(b.t, 'budget'); await flush(); };
+      // the budget inputs as the browser has them, then the input event the person's typing fires
+      const budgetInput = (t, which, tot, pct) => { const D = t.documentStub; D.getElementById('bf-budget-total').value = tot; D.getElementById('bf-budget-pct').value = pct; fire(t, 'input', { getAttribute: k => (k === 'data-bf' ? which : null) }); };
+      const logWith = (v, v2) => BFX.log.replace(/\n?$/, '\n') + '"3","2026-10-17T11:00:00.000Z","Glen","budget 2026-10","' + v + '","' + v2 + '","00000000-0000-4000-8000-000000000003"\n';
+      const PAGE_SRC = fs.readFileSync(PAGE, 'utf8');
+      const BF_600 = (PAGE_SRC.match(/@media \(max-width:600px\)\{[^\n]*\.bf-[^\n]*\}/g) || []).join(' ');
+      // a focus rig over the stub DOM: document.activeElement inside the view, and a querySelector on the view's container
+      // that finds an element by #id or by its [data-*="..."] attributes in the HTML the view last wrote (any patched area)
+      const focusRig = b => {
+        const D = b.t.documentStub, C = b.t.els.content, els = b.t.els;
+        const attrsOf = tag => { const o = { tag: ((/^<(\w+)/.exec(tag) || [])[1] || '').toUpperCase() }; for (const m of tag.matchAll(/\s([\w-]+)="([^"]*)"/g)) o[m[1]] = m[2]; return o; };
+        const mk = attrs => ({ __inView: true, tagName: attrs.tag || 'BUTTON', type: attrs.type || '', id: attrs.id || '',
+          getAttribute: k => (Object.prototype.hasOwnProperty.call(attrs, k) ? attrs[k] : null), focus() { D.activeElement = this; } });
+        C.contains = n => !!(n && n.__inView);
+        C.querySelector = sel => {
+          const all = Object.keys(els).map(k => String(els[k].innerHTML || '')).join('\n'), tags = all.match(/<[a-z]+\b[^>]*>/g) || [];
+          const idm = /^#([\w-]+)$/.exec(sel);
+          const pairs = idm ? [['id', idm[1]]] : [...sel.matchAll(/\[([\w-]+)="([^"]*)"\]/g)].map(m => [m[1], m[2]]);
+          if (!pairs.length) return null;
+          const hit = tags.find(tg => pairs.every(([k, v]) => tg.includes(' ' + k + '="' + v + '"')));
+          return hit ? mk(attrsOf(hit)) : null;
+        };
+        return { focus: attrs => { D.activeElement = mk(attrs); return D.activeElement; }, active: () => D.activeElement };
+      };
+      const desc = a => (a ? [a.tagName, a.id, a.getAttribute('data-bf'), a.getAttribute('data-v')].join('/') : 'nothing focused');
+
+      // ---- H1: the focused control is focused again after the view rebuilds it (user actions and background repaints)
+      {
+        const b = await bootBfcm({ now: '2026-10-17T12:00:00.000Z' });
+        const rig = focusRig(b);
+        const op = rig.focus({ tag: 'BUTTON', 'data-bf': 'preset', 'data-v': 'last7' });
+        fire(b.t, 'click', { closest: () => op });
+        let a = rig.active();
+        check('H1: a focused preset button, clicked: the view repaints and the same preset button has focus again',
+          b.V._state.window.preset === 'last7' && a !== op && !!a && a.getAttribute('data-bf') === 'preset' && a.getAttribute('data-v') === 'last7', desc(a));
+        const om = rig.focus({ tag: 'BUTTON', 'data-bf': 'month', 'data-v': '2026-11' });
+        fire(b.t, 'click', { closest: () => om });
+        a = rig.active();
+        check('H1: a focused month button keeps focus after the month change', b.V._state.month === '2026-11' && a !== om && !!a && a.getAttribute('data-bf') === 'month' && a.getAttribute('data-v') === '2026-11', desc(a));
+        const ob = rig.focus({ tag: 'BUTTON', 'data-bf': 'basis', 'data-v': 'last14' });
+        fire(b.t, 'click', { closest: () => ob });
+        a = rig.active();
+        check('H1: a focused forecast basis button keeps focus when the forecast panel is rebuilt', b.V._state.sliders.basis === 'last14' && a !== ob && !!a && a.getAttribute('data-bf') === 'basis' && a.getAttribute('data-v') === 'last14', desc(a));
+        const orr = rig.focus({ tag: 'BUTTON', 'data-bf': 'reset' });
+        fire(b.t, 'click', { closest: () => orr });
+        a = rig.active();
+        check('H1: a focused Reset button keeps focus after the reset', a !== orr && !!a && a.getAttribute('data-bf') === 'reset', desc(a));
+        const od = rig.focus({ tag: 'INPUT', type: 'date', id: 'bf-from', 'data-bf': 'from' });
+        b.t.documentStub.getElementById('bf-from').value = '2026-10-05'; b.t.documentStub.getElementById('bf-to').value = '2026-10-12';
+        fire(b.t, 'change', { getAttribute: k => (k === 'data-bf' ? 'from' : null) });
+        a = rig.active();
+        check('H1: a date pick repaints at once and the From date input keeps focus', /5 to 12 Oct/.test(b.html()) && a !== od && !!a && a.id === 'bf-from', desc(a));
+        const ox = rig.focus({ tag: 'BUTTON', 'data-bf': 'preset', 'data-v': 'sale' }), dv = b.V._state.dataVersion;
+        b.bf.daily = b.bf.daily.replace('"2026-10-16","876.00"', '"2026-10-16","901.00"');
+        await b.clock.advance(16 * 60000);
+        a = rig.active();
+        check('H1: a background refresh that repaints the view restores focus too', b.V._state.dataVersion > dv && b.V._state.paintedVersion === b.V._state.dataVersion && a !== ox && !!a && a.getAttribute('data-bf') === 'preset' && a.getAttribute('data-v') === 'sale', desc(a));
+        const ou = rig.focus({ tag: 'SUMMARY', 'data-bf': 'panel', 'data-v': 'days' });
+        b.V.setPreset('week');
+        a = rig.active();
+        check('H1: a focused panel toggle ("Show every day as a table") keeps focus across a repaint', a !== ou && !!a && a.tagName === 'SUMMARY' && a.getAttribute('data-v') === 'days', desc(a));
+      }
+
+      // ---- M1: typing only a total never invents a 50/50 split; L10: the split slider waits for a total
+      {
+        const b = await boot({ bf: { log: logWith('32000', '') }, post: () => answer({ ok: true, current: curOf({ 'budget 2026-10': ['45000', '40', 'Glen', SAVED_AT] }) }) });
+        budgetInput(b.t, 'budget-total', '45000', '50');   // the split slider sits at its 50 default because the saved split is blank
+        const u = b.V._state.unsaved['budget 2026-10'];
+        check('M1: a typed total with a blank saved split keeps the split blank (never a silent 50)', !!u && u.v === 45000 && u.v2 === null, JSON.stringify(u));
+        budgetInput(b.t, 'budget-total', '32000', '50');
+        check('M1: typing the saved total back clears Unsaved', !b.V._state.unsaved['budget 2026-10'], JSON.stringify(b.V._state.unsaved['budget 2026-10']));
+        budgetInput(b.t, 'budget-total', '45000', '50'); typeName(b.t, 'Glen'); clickSave(b.t, 'budget'); await flush();
+        check('M1: Save with the split still blank posts nothing and asks for the split', b.posts.length === 0 && /Move the Google \/ Meta split slider to set the split, then save\./.test(meta(b.t)), plain(meta(b.t)).slice(0, 200));
+        budgetInput(b.t, 'budget-pct', '45000', '40'); clickSave(b.t, 'budget'); await flush();
+        const bd = bodyOf(b.posts, 0);
+        check('M1: once the split slider is moved, the save sends that split (expect = the saved total, blank split)',
+          b.posts.length === 1 && bd.value === '45000' && bd.value2 === '40' && bd.expect === '32000' && bd.expect2 === '', JSON.stringify(bd));
+        const c = await boot({ post: ok45 });
+        budgetInput(c.t, 'budget-total', '45000', '50');   // a stale slider value in the DOM never wins over the saved 70
+        check('M1: with a saved split (70), a typed total keeps the saved 70', (c.V._state.unsaved['budget 2026-10'] || {}).v2 === 70, JSON.stringify(c.V._state.unsaved['budget 2026-10']));
+        // L10
+        const d = await boot({});
+        d.V.setMonth('2026-12');   // December: no budget set
+        const hd = d.html();
+        budgetInput(d.t, 'budget-pct', '', '40');
+        check('L10: the split slider is ignored while the total is blank (nothing marked Unsaved)', !d.V._state.unsaved['budget 2026-12'], JSON.stringify(d.V._state.unsaved['budget 2026-12']));
+        check('L10: the split slider is drawn disabled until a total is typed', /<input id="bf-budget-pct"[^>]*\sdisabled[\s>]/.test(hd), (hd.match(/<input id="bf-budget-pct"[^>]*>/) || ['(none)'])[0]);
+      }
+
+      // ---- M2: an edit typed while its own save is in flight is kept when the answer lands
+      {
+        let release = null;
+        const b = await boot({ post: () => new Promise(r => { release = () => r({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify({ ok: true, current: curOf({ 'budget 2026-10': ['45000', '60', 'Glen', SAVED_AT] }) })) }); }) });
+        await saveBudget(b);
+        b.V.edit('budget 2026-10', 47000, 60);   // typed while the 45000 save is in flight
+        if (release) release();
+        await flush(); await flush();
+        const u = b.V._state.unsaved['budget 2026-10'], h = b.html();
+        check('M2: the newer edit survives the answer (Unsaved, 47000 in the control, based on the 45000 just saved)',
+          b.posts.length === 1 && !!u && u.v === 47000 && u.base === '45000|60' && b.V._state.cfg.budgets['2026-10'].total === 45000 && /data-bf="budget-total"[^>]*value="47000"/.test(h) && /Unsaved/.test(h), JSON.stringify(u));
+      }
+
+      // ---- M3: re-saving after "Not confirmed" reuses the rid (a save that did land answers duplicate)
+      {
+        const run = async (secondValue) => {
+          let first = null;
+          const b = await boot({ post: (n, init) => {
+            const q = JSON.parse(init.body);
+            if (n <= 2) { first = first || q.rid; return netErr(); }
+            const c = curOf({ 'budget 2026-10': ['45000', '60', 'Glen', SAVED_AT] });
+            return answer(q.rid === first ? { ok: true, duplicate: true, current: c } : { ok: false, error: 'changed', current: c });
+          } });
+          await saveBudget(b); await b.clock.advance(5000); await b.clock.advance(5000);
+          const mid = b.html() + meta(b.t);
+          if (secondValue) b.V.edit('budget 2026-10', secondValue, 60);
+          clickSave(b.t, 'budget'); await flush(); await b.clock.advance(4000);
+          return { b, mid };
+        };
+        const { b, mid } = await run(null);
+        check('M3: same values saved again after "Not confirmed": the same rid is sent, so the landed save reads "Saved for everyone"',
+          /Not confirmed/.test(mid) && b.posts.length === 3 && bodyOf(b.posts, 2).rid === bodyOf(b.posts, 0).rid && b.html().includes('Saved for everyone · Glen') && !/someone else saved/.test(b.html()),
+          `posts=${b.posts.length} rids=${b.posts.map((p, i) => bodyOf(b.posts, i).rid).join(',')} ${(b.html().match(/(Not saved|Saved for everyone)[^<]*/) || ['(none)'])[0]}`);
+        const r2 = await run(46000);
+        check('M3: a different value after "Not confirmed" gets a new rid', r2.b.posts.length === 3 && bodyOf(r2.b.posts, 2).rid !== bodyOf(r2.b.posts, 0).rid && bodyOf(r2.b.posts, 2).value === '46000');
+      }
+
+      // ---- M4: ok with a `current` the page cannot adopt: the saved value is patched in locally
+      {
+        const b = await boot({ post: () => answer({ ok: true, current: { 'budget 2026-10': { value: '45000', value2: '60', who: 'Glen', at: SAVED_AT } } }) });
+        await saveBudget(b);
+        const c = b.V._state.cfg, h = b.html();
+        check('M4: the new value shows under "Saved for everyone" (not the old one), the rest of the settings untouched',
+          c.budgets['2026-10'] && c.budgets['2026-10'].total === 45000 && c.budgets['2026-10'].pct === 60 && /data-bf="budget-total"[^>]*value="45000"/.test(h) && h.includes('Saved for everyone · Glen · 17 Oct, 8:00 am Toronto time') &&
+          c.budgets['2026-11'].total === 60000 && c.targets.mer === 11.5 && !/Unsaved/.test(h), JSON.stringify(c.budgets['2026-10']));
+      }
+
+      // ---- M5: a config or log tab answered with an HTML page keeps the last good settings
+      {
+        const b = await bootBfcm({ now: '2026-10-17T12:00:00.000Z' });
+        b.bf.config = '<!DOCTYPE html><html>Google error</html>';
+        await b.clock.advance(16 * 60000);
+        const c1 = b.V._state.cfg, h1 = b.html();
+        b.bf.config = BFX.config; b.bf.log = '<html>Google error</html>';
+        await b.clock.advance(16 * 60000);
+        const c2 = b.V._state.cfg, h2 = b.html();
+        check('M5: config tab answers HTML: budgets kept, "from the previous load" note, never "could not be read"',
+          !c1.error && c1.budgets['2026-10'].total === 32000 && /Budget settings are from the previous load/.test(h1) && !/could not be read/.test(h1), c1.error || '');
+        check('M5: log tab answers HTML: the same', !c2.error && c2.budgets['2026-10'].total === 32000 && /Budget settings are from the previous load/.test(h2) && !/could not be read/.test(h2), c2.error || '');
+      }
+
+      // ---- M6: save states are announced by one persistent live region; focus comes back to the Save button
+      {
+        const b = await boot({ post: ok45 });
+        const live = b.t.documentStub.getElementById('bf-live'), said = [];
+        let txt = '';
+        Object.defineProperty(live, 'textContent', { get: () => txt, set: v => { txt = String(v); said.push(txt); }, configurable: true });
+        const rig = focusRig(b);
+        b.V.edit('budget 2026-10', 45000, 60); typeName(b.t, 'Glen');
+        const os = rig.focus({ tag: 'BUTTON', 'data-bf': 'save', 'data-v': 'budget' });
+        fire(b.t, 'click', { closest: () => os }); await flush();
+        check('M6: one live region in the page (role=status, aria-live=polite), outside the content the view repaints',
+          /<div id="bf-live"[^>]*role="status"[^>]*aria-live="polite"[^>]*><\/div>/.test(PAGE_SRC) && PAGE_SRC.indexOf('id="bf-live"') > PAGE_SRC.indexOf('<div id="content"') && !/bf-live/.test(b.html() + meta(b.t)));
+        check('M6: the live region announces each save state (October budget: Saving, then Saved for everyone)',
+          b.t.documentStub.getElementById('bf-live') === live && said.some(s => /^October budget: Saving/.test(s)) && said.some(s => /^October budget: Saved for everyone · .*Glen.* · 17 Oct, 8:00 am Toronto time$/.test(s)), JSON.stringify(said));
+        const a = rig.active();
+        check('M6: focus is back on the budget Save button when the save finishes; Save buttons are aria-disabled, never disabled (stay focusable)',
+          a !== os && !!a && a.getAttribute('data-bf') === 'save' && a.getAttribute('data-v') === 'budget' && !/<button[^>]*data-bf="save"[^>]*\sdisabled[\s>]/.test(b.html() + rawMeta(b.t)) && /aria-disabled="true"/.test(rawMeta(b.t)), desc(a));
+        check('M6: the per-key status lines are not live regions themselves (no double announcement)', !/class="bf-status[^"]*" role="status"/.test(b.html() + rawMeta(b.t)));
+      }
+
+      // ---- M7: configWrites on with no endpoint: read-only, no dead button, no "switched on" copy anywhere
+      {
+        const b = await bootBfcm({ now: '2026-10-17T12:00:00.000Z', configWrites: true });
+        const h = b.html(), src = fs.readFileSync(path.join(path.dirname(PAGE), 'bfcm-view.js'), 'utf8');
+        check('M7: configWrites on, endpoint empty: the read-only budget block (no inputs, no Save button), the "Set by" line shows',
+          !/data-bf="budget-total"|data-bf="target"|data-bf="save"/.test(h) && /\$32,000/.test(h) && /Set by Mac/.test(h), plain(h).slice(0, 160));
+        check('M7: no "switched on" wording left in the view', !/switched on/i.test(src + h));
+      }
+
+      // ---- M8: before any sale day: a neutral note, never the red alert
+      {
+        const b = await bootBfcm({ now: '2026-10-17T12:00:00.000Z', bf: { daily: BFX.daily.split(/\r?\n/)[0] + '\n' } });
+        const h = b.html();
+        check('M8: no sale days yet: "The sale data has not started coming in yet." in a neutral note, not bf-alert',
+          /<div class="bf-info" role="status">The sale data has not started coming in yet\.<\/div>/.test(h) && !/No sale days/.test(h), plain(h).slice(0, 200));
+      }
+
+      // ---- M9: the Sale to date tile spans both columns at phone width
+      check('M9: at max-width 600px #bf-t-sale spans both tile columns', /#bf-t-sale\{grid-column:1\/-1\}/.test(BF_600), BF_600.slice(0, 160));
+
+      // ---- M10: Chart.js missing (CDN down): the view opens and says the chart could not load
+      {
+        const b = await bootBfcm({ open: false });
+        delete b.t.sandbox.Chart;
+        b.TA.CHANNELS.bfcm.enabled = true;
+        let threw = null;
+        try { await b.TA.switchChannel('bfcm'); await flush(); } catch (e) { threw = e; }
+        const h = b.html();
+        check('M10: no Chart.js: the view mounts, the tiles show, and "The chart could not load. The figures above are still correct."',
+          !threw && !!b.V._state && b.V._state.mounted && /The chart could not load\. The figures above are still correct\./.test(h) && /x$/.test(tileOf(h, 'google').v) && !/<canvas/.test(h), threw ? String(threw) : plain(h).slice(0, 160));
+      }
+
+      // ---- M11: right after a save, an older gviz config does not flip the value back (held 120 s or until gviz catches up)
+      {
+        const b = await boot({ post: ok45 });
+        await saveBudget(b);
+        const tot = x => ((x.V._state.cfg.budgets['2026-10'] || {}).total);
+        const t0 = tot(b);
+        b.bf.daily = b.bf.daily.replace('"2026-10-16","876.00"', '"2026-10-16","877.00"');   // new data, so the refresh re-reads the (still old) config
+        await b.clock.advance(10000); await b.V.refresh(); await flush();
+        const held = tot(b), hh = b.html();
+        b.bf.daily = b.bf.daily.replace('"2026-10-16","877.00"', '"2026-10-16","878.00"');
+        await b.clock.advance(120000); await b.V.refresh(); await flush();
+        check('M11: 10 s after the save, an older gviz config keeps the saved 45000 on screen', t0 === 45000 && held === 45000 && /data-bf="budget-total"[^>]*value="45000"/.test(hh), `${t0} -> ${held}`);
+        check('M11: after 120 s the sheet is believed again (gviz still says 32000)', tot(b) === 32000, String(tot(b)));
+        const c = await boot({ post: ok45 });
+        await saveBudget(c);
+        c.bf.log = c.bf.log.replace(/\n?$/, '\n') + '"3","2026-10-17T12:00:30.000Z","Maria","budget 2026-10","50000","55","c3d4e5f6-0718-4293-a4b5-c6d7e8f90a1b"\n';
+        await c.clock.advance(40000); await c.V.refresh(); await flush();
+        check('M11: a newer save by someone else inside the 120 s shows at once', tot(c) === 50000 && /Set by Maria/.test(c.html()), String(tot(c)));
+      }
+
+      // ---- M12: repeated refresh errors back off (15, 15, 30, 60, 60 min), a good refresh resets to 15
+      {
+        const b = await bootBfcm({ now: '2026-10-17T12:00:00.000Z' });
+        const n = () => bfUrls(b.t.fetchLog).daily, seen = [], more = [];
+        b.bf.daily = 'NETWORK-ERROR';
+        for (let i = 0; i < 8; i++) { await b.clock.advance(15 * 60000); seen.push(n()); }
+        b.bf.daily = BFX.daily;
+        for (let i = 0; i < 5; i++) { await b.clock.advance(15 * 60000); more.push(n()); }
+        check('M12: after 2 failed refreshes in a row the wait doubles to 30 min, then 60 min (capped)', seen.join() === '2,3,3,4,4,4,4,5', seen.join());
+        check('M12: a good refresh resets the wait to 15 minutes', more.join() === '5,5,5,6,7', more.join());
+      }
+
+      // ---- L1: after the sale, no stale banners; a neutral "sale has ended" note
+      {
+        const b = await bootBfcm({ now: '2026-12-10T18:00:00.000Z' });
+        const h = b.html();
+        check('L1: Toronto today past sale end + 2 days: no stale banners or "uses stale" marks, "The sale has ended. These are the final figures."',
+          !/data last updated|data has not loaded yet/.test(h) && !/uses stale/.test(h) && /<div class="bf-info" role="status">The sale has ended\. These are the final figures\.<\/div>/.test(h), plain(h).slice(0, 240));
+        const c = await bootBfcm({ now: '2026-12-08T18:00:00.000Z' });
+        check('L1: on sale end + 2 days the stale banners still show (late pulls may still land)', /data last updated/.test(c.html()) && !/The sale has ended/.test(c.html()));
+      }
+
+      // ---- L3: typed names are isolated with <bdi>; long names wrap
+      {
+        const r = await bootBfcm({ now: '2026-10-17T12:00:00.000Z' });
+        const hr = String(r.t.els.content.innerHTML);
+        const b = await boot({ post: ok45 });
+        await saveBudget(b);
+        b.V.edit('budget 2026-10', 46000, 60);
+        b.bf.log = b.bf.log.replace(/\n?$/, '\n') + '"3","2026-10-17T12:10:00.000Z","Maria","budget 2026-10","35000","70","c3d4e5f6-0718-4293-a4b5-c6d7e8f90a1b"\n';
+        await b.clock.advance(16 * 60000);
+        const hb = String(b.t.els.content.innerHTML) + rawMeta(b.t);
+        check('L3: "Set by" and the read-only target lines wrap the name in <bdi>', /Set by <bdi>Mac O&#39;Neil &quot;Mac&quot;<\/bdi>/.test(hr) && /MER target set by <bdi>&lt;img src=x onerror=alert\(1\)&gt;<\/bdi>/.test(hr), (hr.match(/Set by[^·]*/) || ['(none)'])[0]);
+        check('L3: the Newer saved value line wraps the name in <bdi>', /Newer saved value: [^<]*by <bdi>Maria<\/bdi>/.test(hb), (hb.match(/Newer saved value[^<]*(<bdi>[^<]*<\/bdi>)?/) || ['(none)'])[0]);
+        const s = await boot({ post: ok45 });
+        await saveBudget(s);
+        check('L3: the Saved line wraps the name in <bdi>', /Saved for everyone · <bdi>Glen<\/bdi> · 17 Oct/.test(rawMeta(s.t)), rawMeta(s.t).slice(0, 200));
+        check('L3: .bf-note and .bf-status wrap long words (overflow-wrap:anywhere)', /\.bf-note\{[^}]*overflow-wrap:anywhere/.test(PAGE_SRC) && /\.bf-status\{[^}]*overflow-wrap:anywhere/.test(PAGE_SRC));
+      }
+
+      // ---- L5: the picked month resets when the sale window no longer has it
+      {
+        const b = await bootBfcm({ now: '2026-10-17T12:00:00.000Z' });
+        b.V.setMonth('2026-12');
+        b.bf.config = b.bf.config.replace('"sale_end","2026-12-06",""', '"sale_end","2026-11-30",""');
+        await b.clock.advance(16 * 60000);
+        check('L5: sale_end moves to 30 Nov while December is picked: the month resets to the default (October)', b.V._state.cfg.saleEnd === '2026-11-30' && b.V._state.month === '2026-10' && /data-bf="month" data-v="2026-10" aria-pressed="true"/.test(b.html()), b.V._state.month);
+      }
+
+      // ---- L6: impossible typed dates are ignored
+      {
+        const b = await bootBfcm({ now: '2026-10-17T12:00:00.000Z' });
+        b.V.setCustom('2026-10-02', '2026-02-30');
+        check('L6: a custom range with 30 Feb is ignored (the window stays Sale to date)', b.V._state.window.preset === 'sale' && !b.V._state.custom, JSON.stringify(b.V._state.window));
+      }
+
+      // ---- L7: the 60 s repaint waits under a focused date input; the alerts still update; focusout runs it
+      {
+        const b = await bootBfcm({ now: '2026-10-17T12:00:00.000Z' });
+        b.t.els.content.contains = () => true;
+        b.t.documentStub.activeElement = { tagName: 'INPUT', type: 'date', id: 'bf-from', getAttribute: k => (k === 'data-bf' ? 'from' : null) };
+        const before = b.html();
+        await b.clock.advance(4.5 * 3600000);   // past 16:05Z: the 60 s timer sees Meta turn stale; the sheet itself does not change
+        const al = String((b.t.els['bf-alerts'] && b.t.els['bf-alerts'].innerHTML) || '');
+        check('L7: a focused date input holds the 60 s repaint (the input is not rebuilt under the person)', b.html() === before && b.V._state.pendingPaint === true);
+        check('L7: the alerts area still gets the stale banner meanwhile', /Meta data last updated 16 Oct, 6:05 am Toronto time/.test(al), al.slice(0, 160));
+        b.t.documentStub.activeElement = null;
+        fire(b.t, 'focusout', {}); await b.clock.advance(1);
+        check('L7: when focus leaves, the held repaint runs', /Meta data last updated 16 Oct/.test(b.html()) && b.V._state.pendingPaint === false);
+      }
+
+      // ---- L8: an older refresh that answers after a newer one is ignored
+      {
+        const b = await bootBfcm({ now: '2026-10-17T12:00:00.000Z' });
+        const real = b.t.sandbox.fetch, gates = [];
+        b.t.sandbox.fetch = (u, i) => { const p = real(u, i); return new Promise(r => gates.push(() => r(p))); };
+        const slow = b.V.refresh();   // reads the old sheet; its answers are held back
+        b.t.sandbox.fetch = real;
+        b.bf.daily = b.bf.daily.replace('"2026-10-16","876.00"', '"2026-10-16","999.00"');
+        await b.V.refresh(); await flush();
+        const fresh = /\$999/.test(b.html());
+        gates.forEach(g => g()); await slow; await flush();
+        check('L8: the late, older refresh does not overwrite the newer figures', fresh && /\$999/.test(b.html()) && gates.length === 3, `fresh=${fresh} gates=${gates.length}`);
+      }
+
+      // ---- L9: an out-of-range target says so beside it, is never posted, and never drives the maths
+      {
+        const b = await boot({ post: () => answer({ ok: true, current: curOf() }) });
+        b.V.edit('target mer', 99);
+        check('L9: a target typed outside 1..50 shows "Target must be between 1 and 50"', /MER: Target must be between 1 and 50/.test(tmeta(b.t)), plain(tmeta(b.t)).slice(0, 200));
+        typeName(b.t, 'Glen'); clickSave(b.t, 'targets'); await flush();
+        check('L9: the out-of-range target is never posted', b.posts.length === 0);
+        b.V.setPreset('last7');
+        const h = b.html(), ch = b.t.createdCharts.filter(c => !c.destroyed)[0];
+        check('L9: an unsaved target never drives the tiles or the chart (MER target stays 11.5)', /target 11\.5x/.test(tileOf(h, 'mer').s) && !!ch && ch.config.data.datasets[5].data.every(v => v === 11.5));
+      }
+
+      // ---- L11: transient refusals keep the typed edit; changed / invalid / log full revert
+      for (const [err, keep] of [['busy', true], ['closed', true], ['changed', false], ['invalid', false], ['log full', false]]) {
+        const b = await boot({ post: () => answer(Object.assign({ ok: false, error: err }, err === 'changed' ? { current: curOf() } : {}, err === 'invalid' ? { field: 'value', reason: 'bad value' } : {})) });
+        await saveBudget(b);
+        const h = b.html();
+        if (keep) check(`L11: "${err}" keeps the typed edit (45000, Unsaved) and says "Not saved: ... Nothing changed."`, /data-bf="budget-total"[^>]*value="45000"/.test(h) && /Unsaved/.test(h) && /Not saved: [^<]+\. Nothing changed\./.test(h), (h.match(/Not saved[^<]*/) || ['(none)'])[0]);
+        else check(`L11: "${err}" reverts the control to the saved value (32000)`, /data-bf="budget-total"[^>]*value="32000"/.test(h) && !/Unsaved/.test(h) && /Not saved: [^<]+\. Nothing changed\./.test(h));
+      }
+
+      // ---- L12: keyboard-reachable scrolling regions, role=status on loading + config error, 40 px targets on phones
+      {
+        const b = await bootBfcm({ open: false });
+        b.TA.CHANNELS.bfcm.enabled = true;
+        const p = b.TA.switchChannel('bfcm');
+        const loading = b.html();
+        await p; await flush();
+        const h = b.html();
+        const e = await bootBfcm({ bf: { config: '<html>not a csv</html>' } });
+        check('L12: the chart scroll box and both tables are focusable labelled regions',
+          /<div class="bf-chartscroll" id="bf-chartscroll" tabindex="0" role="region" aria-label="[^"]+">/.test(h) && (h.match(/<div class="bf-tw" id="[\w-]+" tabindex="0" role="region" aria-label="[^"]+">/g) || []).length === 2);
+        check('L12: the loading text and the config-error alert are role=status', /<div class="loading" role="status">/.test(loading) && /<div class="bf-alert" role="status">Budget settings could not be read/.test(e.html()), loading.slice(0, 120));
+        check('L12: at phone width .bf-pre and .bf-save are at least 40 px tall', /\.bf-pre,\.bf-save\{min-height:40px\}/.test(BF_600), BF_600.slice(0, 200));
+      }
+
+      // ---- L14: the channel row and its hint follow the enabled channels, not Meta / Total MER alone
+      {
+        const off = [["key:'meta', label:'Meta Ads', enabled:true", "key:'meta', label:'Meta Ads', enabled:false"], ["key:'mer', label:'Total MER', enabled:true", "key:'mer', label:'Total MER', enabled:false"]];
+        const BFCM_OFF_PATCH = code.includes(BFCM_ON[1]) ? [[BFCM_ON[1], BFCM_ON[0]]] : [];
+        const t = bootPage(csv, metaCsv, merCsv, { clock: makeClock('2026-10-17T18:00:00.000Z'), patch: off.concat(BFCM_ON_PATCH) });
+        await flush(); await flush();
+        const row = t.els.channelrow, hint = (t.els.channelhint && t.els.channelhint.textContent) || '';
+        check('L14: Google + BFCM only: the channel row shows and the hint counts two views', row.style.display !== 'none' && row.style.visibility === 'visible' && hint === 'Two views, one report. BFCM 2026 follows the sale day by day.', `display=${row.style.display} visibility=${row.style.visibility} hint=${hint}`);
+        const u = bootPage(csv, metaCsv, merCsv, { clock: makeClock('2026-10-17T18:00:00.000Z'), patch: off.concat(BFCM_OFF_PATCH) });
+        await flush(); await flush();
+        check('L14: Google alone: the channel row stays hidden', u.els.channelrow.style.display === 'none');
       }
     }
   }
