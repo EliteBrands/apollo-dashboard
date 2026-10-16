@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- apollo-dashboard v3.3.0 -->
+<!-- apollo-dashboard v4.0.0 -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -18,6 +18,8 @@
     --text:#E5E9F0; --muted:#9CA3AF; --good:#3fd68f; --bad:#FF6B6B;
     --head:'Space Grotesk',Arial,sans-serif; --body:Inter,system-ui,'Segoe UI',Arial,sans-serif;
     --mono:'JetBrains Mono',Consolas,monospace;
+    --sale:#F59E0B; --sale-dim:rgba(245,158,11,.12); --sale-line:rgba(245,158,11,.40);   /* BFCM 2026 chrome ONLY (v4) */
+    --bf-g:#2393BE; --bf-m:#d55181; --bf-under:#8FA3BF;   /* BFCM series: Google / Meta (dataviz-validated on --card), pacing "under" */
   }
   *{box-sizing:border-box;margin:0;padding:0}
   body{background:linear-gradient(165deg,var(--ink) 0%,#0B1B26 70%,#0a1620 100%);min-height:100vh;color:var(--text);font-family:var(--body);font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
@@ -161,6 +163,92 @@
     .tile.ghost{display:none}
     .channelrow .hint{display:none}
   }
+
+  /* v4 BFCM 2026 view (behind CHANNELS.bfcm.enabled). Amber = BFCM chrome only. */
+  #ch-bfcm{border-color:var(--sale-line)}
+  #ch-bfcm .mark{border-color:var(--sale-line);color:var(--sale)}
+  #ch-bfcm[aria-pressed="true"]{color:var(--ink);background:var(--sale);border-color:var(--sale)}
+  #ch-bfcm[aria-pressed="true"] .mark{color:var(--ink)}
+  footer .ver{margin-left:auto;font-family:var(--mono);font-size:11px;opacity:.7}
+  .bf{display:flex;flex-direction:column;gap:18px;min-width:0}
+  .bf-alert{border:1px solid var(--bad);background:rgba(255,107,107,.08);border-radius:12px;padding:12px 16px;font-size:13px}
+  .bf-stale{border:1px solid var(--sale-line);background:var(--sale-dim);border-radius:12px;padding:10px 16px;font-size:13px}
+  .bf-stale b{color:var(--sale);font-weight:600}
+  .bf-stalenote{color:var(--sale)}
+  .bf-phase{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border:1px solid var(--border);border-radius:12px;overflow:hidden}
+  .bf-ph{padding:9px 12px;font-size:12px;color:var(--muted);text-align:center;line-height:1.35}
+  .bf-ph+.bf-ph{border-left:1px solid var(--border)}
+  .bf-ph b{display:block;font-family:var(--head);font-weight:600;font-size:12.5px;color:var(--text)}
+  .bf-ph.now{background:var(--sale-dim)} .bf-ph.now b{color:var(--sale)}
+  .bf-prog{position:relative;height:4px;border-radius:999px;background:rgba(148,163,184,.15);margin:12px 6px 8px}
+  .bf-prog i{position:absolute;top:-4px;width:12px;height:12px;border-radius:50%;background:var(--sale);transform:translateX(-50%);box-shadow:0 0 0 2px var(--ink)}
+  .bf-today{font-family:var(--mono);font-size:12px;color:var(--sale)}
+  .bf-datebar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;border-top:1px solid var(--border);border-bottom:1px solid var(--border);padding:12px 2px}
+  .bf-pre{font-family:var(--head);font-weight:600;font-size:12.5px;color:var(--muted);background:transparent;border:1px solid var(--border);border-radius:999px;padding:6px 14px;cursor:pointer;min-height:32px}
+  .bf-pre:hover{color:var(--text);background:rgba(148,163,184,.08)}
+  .bf-pre[aria-pressed="true"]{color:var(--ink);background:var(--sale);border-color:var(--sale)}
+  .bf-datebar label{font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:6px}
+  .bf input[type="date"],.bf input[type="number"]{background:rgba(5,8,22,.6);border:1px solid #4B5563;color:var(--text);border-radius:10px;padding:6px 9px;font-family:var(--mono);font-size:12px;color-scheme:dark;max-width:100%}
+  .bf input[type="number"]{font-size:14px;width:100%;max-width:220px}
+  .bf input:focus-visible,.bf button:focus-visible,.bf summary:focus-visible{outline:2px solid var(--sale);outline-offset:2px}
+  .bf-wl{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .bf-fresh{font-size:12px;color:var(--muted);margin-top:8px}
+  .bf-band{display:flex;align-items:center;gap:12px;font-family:var(--head);font-weight:600;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-top:6px}
+  .bf-band::after{content:'';flex:1;height:1px;background:var(--border)}
+  .bf-budget,.bf-fc{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.5fr);gap:24px;background:var(--card);border:1px solid var(--sale-line);border-radius:18px;padding:18px 22px}
+  .bf-fc{border-color:var(--border)}
+  .bf-set,.bf-ctls{display:flex;flex-direction:column;gap:8px;min-width:0}
+  .bf-lbl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+  .bf-lbl span:last-child{text-transform:none;letter-spacing:0;font-family:var(--mono);color:var(--text)}
+  .bf-gap{margin-top:8px}
+  .bf-segrow{display:flex;flex-wrap:wrap;gap:6px}
+  .bf-big{font-family:var(--mono);font-weight:600;font-size:22px}
+  .bf-split{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:12.5px}
+  .bf-sw{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+  .bf-sw.g{background:var(--bf-g)} .bf-sw.m{background:var(--bf-m)} .bf-sw+.bf-sw{margin-left:-3px}
+  .bf-note{font-size:12px;color:var(--muted);line-height:1.55}
+  .bf-cap{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px}
+  .bf-bar{margin:10px 0 14px}
+  .bf-bh{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:13px}
+  .bf-bn{font-weight:600}
+  .bf-bv{font-family:var(--mono);font-size:12px}
+  .bf-track{position:relative;height:12px;border-radius:999px;background:rgba(148,163,184,.12);margin:6px 0 5px}
+  .bf-fill{position:absolute;left:0;top:0;height:100%;border-radius:999px}
+  .bf-fill.google{background:var(--bf-g)} .bf-fill.meta{background:var(--bf-m)} .bf-fill.total{background:linear-gradient(90deg,var(--bf-g),var(--bf-m))}
+  .bf-proj{position:absolute;left:0;top:-3px;height:18px;border-right:2px dashed rgba(229,233,240,.7);pointer-events:none}
+  .bf-budgetline{position:absolute;top:-5px;width:2px;height:22px;background:var(--text);opacity:.85}
+  .bf-bs{font-size:11.5px;color:var(--muted)}
+  .bf-bs b{font-weight:600}
+  .bf-under{color:var(--bf-under)} .bf-ok{color:var(--good)} .bf-amber{color:var(--sale)} .bf-red{color:var(--bad)} .bf-none{color:var(--text)}
+  .bf-unsaved{display:inline-block;font-size:11px;font-weight:600;color:var(--sale);border:1px solid var(--sale-line);border-radius:999px;padding:1px 9px;margin-right:6px}
+  .bf-newer{font-size:12px;color:var(--sale)}
+  .bf-save{font-family:var(--head);font-weight:600;font-size:12.5px;border-radius:999px;padding:7px 16px;border:1px solid var(--sale);background:var(--sale);color:var(--ink);cursor:pointer;align-self:flex-start}
+  .bf-save[disabled]{opacity:.45;cursor:not-allowed}
+  .bf-range{width:100%;accent-color:var(--sale)}
+  .bf-targets summary{cursor:pointer;font-size:12px;color:var(--muted)}
+  .bf-trow{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12.5px;margin:6px 0}
+  .bf-trow input[type="number"]{max-width:110px}
+  .bf-tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+  .bf-tiles .tile .v{overflow-wrap:anywhere}
+  .bf-card .legend .lchip{height:2px}
+  .bf-chartscroll{overflow-x:auto;margin-top:12px}
+  .bf-chartbox{position:relative;height:440px}
+  .bf-tw{overflow-x:auto;margin-top:10px}
+  .bf-table{width:100%;border-collapse:collapse;font-size:12px}
+  .bf-table th{text-align:right;color:var(--muted);font-weight:500;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;padding:6px 8px;border-bottom:1px solid var(--border);white-space:nowrap}
+  .bf-table td{text-align:right;padding:6px 8px;border-bottom:1px solid rgba(148,163,184,.08);font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .bf-table th:first-child,.bf-table td:first-child{text-align:left;font-family:var(--body)}
+  .bf-table td:last-child{white-space:normal}
+  .bf-table small{display:block;color:var(--muted);font-size:11px}
+  .bf-projrow td{color:var(--sale);font-style:italic}
+  .bf-projrow td:first-child{white-space:normal;min-width:180px}
+  .bf-days summary{cursor:pointer;font-size:12.5px;color:var(--muted)}
+  .bf-ctl{display:flex;flex-direction:column;gap:4px}
+  .bf-out{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  .bf-ftile .v{font-size:20px}
+  .bf-basis{color:var(--muted)}
+  @media (max-width:980px){ .bf-tiles{grid-template-columns:repeat(2,minmax(0,1fr))} .bf-budget,.bf-fc{grid-template-columns:minmax(0,1fr)} }
+  @media (max-width:600px){ .bf-out{grid-template-columns:minmax(0,1fr)} .bf-wl{margin-left:0;flex-basis:100%} .bf-chartbox{height:380px} .bf-budget,.bf-fc{padding:16px} .bf-ph{padding:8px 6px;font-size:11px} .bf-ph b{font-size:11.5px} }
 </style>
 </head>
 <body>
@@ -174,7 +262,7 @@
     </div>
     <div class="headright">
       <span class="livebadge"><span class="livedot"></span>LIVE REPORT</span>
-      <div class="headmeta">Week ending <b id="week-ending">…</b> · updated Wednesdays</div>
+      <div class="headmeta" id="headmeta">Week ending <b id="week-ending">…</b> · updated Wednesdays</div>
     </div>
   </header>
 
@@ -185,6 +273,7 @@
     <button class="channel" id="ch-google" data-channel="google" aria-pressed="true"><span class="mark">G</span>Google Ads</button>
     <button class="channel" id="ch-meta" data-channel="meta" aria-pressed="false"><span class="mark">M</span>Meta Ads</button>
     <button class="channel" id="ch-mer" data-channel="mer" aria-pressed="false"><span class="mark">Σ</span>Total MER</button>
+    <button class="channel" id="ch-bfcm" data-channel="bfcm" aria-pressed="false"><span class="mark">B</span>BFCM 2026</button>
     <span class="hint" id="channelhint">Two views, one report. Each channel counts its own sales.</span>
   </div>
 
@@ -203,9 +292,11 @@
   <footer>
     <b>Elite Brands</b>
     <span id="footnote">· Performance Marketing · Data: Google Ads API, purchase conversions counted by conversion time · Questions: reply to your weekly email</span>
+    <span class="ver">v4.0.0</span>
   </footer>
 </div>
 
+<script src="bfcm-core.js?v=4.0.0"></script><script src="bfcm-view.js?v=4.0.0"></script>
 <script>
 const SHEET_ID = '1IqcF3hZNmtBlsffVi7y9jToIVGbHyWsDuT6os5wHAt0';   // config.json dashboard_sheet_id
 const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Sheet1`;   // google (kept for the sim's URL check)
@@ -301,6 +392,17 @@ const CHANNELS = {
     chartTitle: 'Tracked Revenue and Ad Spend · all markets · both channels',
     chartTitleNet: 'Tracked Revenue, Net Sales and Ad Spend · all markets · both channels',
   },
+  // v4 BFCM 2026: day-by-day sale view (bfcm-core.js + bfcm-view.js). enabled = the launch switch (pill + #bfcm deep link);
+  // configWrites shows the budget / target edit controls (Task 11 adds saving via endpointUrl). It hides controls only:
+  // the server's WRITES_ENABLED is the real switch.
+  bfcm: { key:'bfcm', label:'BFCM 2026', enabled:false, configWrites:false, endpointUrl:'',
+    dailyCsvUrl: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=BFCM%20Daily`,
+    configCsvUrl: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=BFCM%20Config`,
+    logCsvUrl: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=BFCM%20Config%20Log`,
+    refreshMs: 900000,
+    subline: 'Prepared by Elite Brands · BFCM 2026 · All figures CAD · Toronto days',
+    footnote: "· Performance Marketing · Google figures are Google Ads purchase conversions, counted by conversion time. Meta figures are Meta's own purchase figures (7-day click / 1-day view); Google and Meta both count some of the same orders, so their revenue is never added together. Store sales are Tracked Revenue from all three Shopify stores, the same basis as the Total MER view (orders after discounts, before shipping and tax), in CAD at Bank of Canada weekly rates. MER = store sales divided by Google + Meta ad spend. Days are Toronto calendar days, and every time shown is Toronto time · Questions: reply to your weekly email",
+  },
 };
 let CHANNEL='google';
 const ch = () => CHANNELS[CHANNEL];
@@ -328,7 +430,7 @@ const nullableNum = s => { if(s==null||s==='') return null; const v=parseFloat(S
 const n0 = v => v==null?0:v;
 
 // ---- formatting
-const esc = s => String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const esc = s => String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');   // v4: quotes too (spec 23)
 const fmt$ = v => { if(v==null) return '-'; const r=Math.round(Math.abs(v)); return (v<0&&r>0?'-$':'$')+r.toLocaleString('en-US'); };   // -$500, never $-500 or -$0
 const fmtX = v => v==null?'-':(v).toFixed(1)+'x';
 const fmtI = v => v==null?'-':Math.round(v).toLocaleString('en-US');
@@ -872,6 +974,8 @@ function showChannel(){
 }
 function switchChannel(key){
   if(!CHANNELS[key]||!CHANNELS[key].enabled) return Promise.resolve();
+  if(key==='bfcm') return openBfcm();
+  if(CHANNEL==='bfcm') closeBfcm();
   CHANNEL=key;
   if(STORE[key]!==null||FEEDERR[key]){ showChannel(); return Promise.resolve(); }
   charts.forEach(x=>x.destroy()); charts=[];   // the old channel's charts are about to be detached
@@ -892,9 +996,29 @@ function switchChannel(key){
   }
   return fetchChannel(key).then(rows=>{ STORE[key]=rows; if(CHANNEL===key) showChannel(); });
 }
+// v4 BFCM 2026: the view owns #content while open (its own date bar, refresh timers and chart); the weekly
+// window controls and the "Week ending" line hide, and come back untouched when another channel is opened
+function openBfcm(){
+  if(CHANNEL==='bfcm') return Promise.resolve();
+  charts.forEach(x=>x.destroy()); charts=[];
+  CHANNEL='bfcm';
+  applyChrome();
+  document.getElementById('controls').style.display='none';
+  const hm=document.getElementById('headmeta'); if(hm) hm.style.display='none';
+  const content=document.getElementById('content');
+  if(typeof BFCM_VIEW==='undefined'||typeof BFCM_CORE==='undefined'){ content.className='loading'; content.textContent='The BFCM view did not load. Please refresh the page.'; return Promise.resolve(); }
+  return BFCM_VIEW.mount(content,{CHANNELS,parseCSV,esc,Chart});
+}
+function closeBfcm(){
+  if(typeof BFCM_VIEW!=='undefined') BFCM_VIEW.unmount();   // stops every BFCM timer
+  document.getElementById('controls').style.display='';
+  const hm=document.getElementById('headmeta'); if(hm) hm.style.display='';
+}
 
 // test hook for tools/render-sim.cjs (harmless in production)
-window.__apollo={ parseCSV, loadData, buildMerRows, windowStats, makePerfChart, sparkSVG, render, setWindow, switchChannel, CHANNELS, netOf, showNet, toggleExplainer,
+window.__apollo={ parseCSV, loadData, buildMerRows, windowStats, makePerfChart, sparkSVG, render, setWindow, switchChannel, CHANNELS, netOf, showNet, toggleExplainer, esc,
+  get forecast(){return typeof BFCM_CORE!=='undefined'?BFCM_CORE.forecast:null;},   // v4: pure BFCM forecast (spec 19)
+  get bfcm(){return typeof BFCM_VIEW!=='undefined'?BFCM_VIEW:null;},
   get data(){return DATA;}, set data(v){DATA=v;},
   get state(){return state;}, set state(v){state=v;},
   get expanded(){return expanded;},
@@ -904,12 +1028,13 @@ window.__apollo={ parseCSV, loadData, buildMerRows, windowStats, makePerfChart, 
 // ---- boot: Google first (always), Meta / Total MER on demand; a #meta or #mer deep link opens that view after Google loads
 (function boot(){
   const deep=(typeof location!=='undefined'&&(location.hash||'').replace('#','').toLowerCase())||'';
-  const wantChannel=(deep==='meta'||deep==='mer')&&CHANNELS[deep].enabled?deep:null;   // a disabled channel's deep link is ignored
+  const wantChannel=(deep==='meta'||deep==='mer'||deep==='bfcm')&&CHANNELS[deep].enabled?deep:null;   // a disabled channel's deep link is ignored
   if(!CHANNELS.meta.enabled){ const cr=document.getElementById('channelrow'); if(cr) cr.style.display='none'; }
   // a disabled non-default channel keeps its pill out of the row (same pattern as the channelrow hide above)
   for(const k of Object.keys(CHANNELS)){ if(k==='google'||CHANNELS[k].enabled) continue; const b=document.getElementById('ch-'+k); if(b) b.style.display='none'; }
   // the hint describes the pills that are actually on screen
   if(CHANNELS.mer.enabled){ const h=document.getElementById('channelhint'); if(h) h.textContent='Three views, one report. Each ad channel counts its own sales. Total MER counts all store sales against all ad spend.'; }
+  if(CHANNELS.mer.enabled&&CHANNELS.bfcm.enabled){ const h=document.getElementById('channelhint'); if(h) h.textContent='Four views, one report. Each ad channel counts its own sales. Total MER counts all store sales against all ad spend. BFCM 2026 follows the sale day by day.'; }
   fetchChannel('google').then(rows=>{
     STORE.google=rows;
     wireControls();

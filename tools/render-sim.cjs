@@ -14,8 +14,16 @@
  *   node tools/render-sim.cjs <google.csv> <meta.csv> [mer.csv]   use saved CSV snapshots
  *   RENDER_SIM_PAGE=<file> node tools/...     point at a mutated page copy
  *   RENDER_SIM_MER_CSV=<file>                 local Total MER CSV (argv[4] wins)
+ *   RENDER_SIM_BFCM_DIR=<dir>                 BFCM fixtures bfcm-daily.csv / bfcm-config.csv / bfcm-log.csv
+ *                                             (default tools/fixtures); the live BFCM tabs get a smoke section
+ *                                             when the weekly CSVs are fetched live (no argv)
+ *
+ * v4: bootPage also evaluates the page's local <script src="bfcm-*.js"> files (from the page's own
+ * folder, so RENDER_SIM_PAGE can point at a mutated copy with mutated scripts beside it) in the same
+ * vm context BEFORE the inline script, mirroring the browser. BFCM sections run on a fake clock.
  */
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const vm = require('vm');
 const { execFileSync } = require('child_process');
@@ -24,6 +32,8 @@ const https = require('https');
 const PAGE = process.env.RENDER_SIM_PAGE
   ? path.resolve(process.env.RENDER_SIM_PAGE)
   : path.resolve(__dirname, '../index.html');
+const REPO_DIR = path.resolve(__dirname, '..');   // the page repo (git history for the v3.3.0 comparison)
+const BFCM_DIR = process.env.RENDER_SIM_BFCM_DIR ? path.resolve(process.env.RENDER_SIM_BFCM_DIR) : path.resolve(__dirname, 'fixtures');
 const LOCAL_CSV = process.argv[2] || null;
 
 let failures = 0, checks = 0;
@@ -76,14 +86,69 @@ function makeElement(id) {
   return el;
 }
 
-function bootPage(csvText, metaCsvText, merCsvText) {
-  const html = fs.readFileSync(PAGE, 'utf8');
-  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]);
+// the page's inline script plus its local <script src="bfcm-*.js?v=..."> files, in document order
+function pageParts(pageFile) {
+  const html = fs.readFileSync(pageFile, 'utf8');
+  const inline = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]);
+  const srcs = [...html.matchAll(/<script src="(bfcm-[a-z-]+\.js)(?:\?[^"]*)?"><\/script>/g)].map(m => m[1]);
+  return { html, inline, srcs, dir: path.dirname(pageFile) };
+}
+
+// BFCM fixtures (mutable per boot: a test can swap a tab's text between refreshes)
+function loadBfcmFixtures(dir) {
+  const rd = f => { try { return fs.readFileSync(path.join(dir, f), 'utf8'); } catch (e) { return null; } };
+  return { daily: rd('bfcm-daily.csv'), config: rd('bfcm-config.csv'), log: rd('bfcm-log.csv') };
+}
+const BFX = loadBfcmFixtures(BFCM_DIR);
+
+// fake clock: Date.now + setTimeout/setInterval driven by advance(ms); timers fire in time order
+function makeClock(startIso) {
+  let now = Date.parse(startIso), seq = 0;
+  const timers = new Map();
+  const clock = {
+    now: () => now,
+    setTimeout: (fn, ms) => { const id = ++seq; timers.set(id, { fn, at: now + Math.max(0, ms || 0), every: 0 }); return id; },
+    setInterval: (fn, ms) => { const id = ++seq; timers.set(id, { fn, at: now + ms, every: ms }); return id; },
+    clear: id => { timers.delete(id); },
+    pending: () => timers.size,
+    async advance(ms) {
+      const end = now + ms;
+      for (;;) {
+        let next = null;
+        for (const [id, t] of timers) if (t.at <= end && (!next || t.at < next[1].at)) next = [id, t];
+        if (!next) break;
+        const [id, t] = next;
+        now = t.at;
+        if (t.every) t.at += t.every; else timers.delete(id);
+        t.fn();
+        await flush();
+      }
+      now = end;
+      await flush();
+    },
+  };
+  return clock;
+}
+
+// opts (all optional; the weekly sections pass none, so their stubs are unchanged):
+//   page   - page file (default PAGE)          bfcm  - {daily, config, log} texts (default BFX)
+//   clock  - makeClock(): fake Date.now, timers, document.visibilityState + listeners
+//   location - {hash, pathname, search}       patch - [[from, to], ...] applied to the inline script
+function bootPage(csvText, metaCsvText, merCsvText, opts) {
+  opts = opts || {};
+  const parts = pageParts(opts.page || PAGE);
+  const scripts = parts.inline;
   if (!scripts.length) throw new Error('no inline <script> found in page');
-  const code = scripts[scripts.length - 1];
+  let code = scripts[scripts.length - 1];
+  for (const [from, to] of (opts.patch || [])) {
+    if (!code.includes(from)) throw new Error('sim patch target not found in page: ' + from);
+    code = code.replace(from, to);
+  }
 
   const els = {};
   const createdCharts = [];
+  const fetchLog = [];
+  const bf = opts.bfcm || Object.assign({}, BFX);
   class ChartStub {
     constructor(canvas, config) { this.canvas = canvas; this.config = config; this.destroyed = false; createdCharts.push(this); }
     destroy() { this.destroyed = true; }
@@ -93,18 +158,45 @@ function bootPage(csvText, metaCsvText, merCsvText) {
     querySelectorAll() { return []; },
     querySelector() { return null; },
   };
+  if (opts.clock) {
+    documentStub.visibilityState = 'visible';
+    documentStub._listeners = {};
+    documentStub.addEventListener = (ev, fn) => { (documentStub._listeners[ev] = documentStub._listeners[ev] || []).push(fn); };
+    documentStub.removeEventListener = (ev, fn) => { documentStub._listeners[ev] = (documentStub._listeners[ev] || []).filter(f => f !== fn); };
+    documentStub.fire = ev => (documentStub._listeners[ev] || []).slice().forEach(fn => fn({ type: ev }));
+  }
   const sandbox = {
     window: {}, document: documentStub, Chart: ChartStub,
-    fetch: (url) => Promise.resolve({ ok: true, text: () => Promise.resolve(
-      String(url).includes('sheet=Total%20MER') ? (merCsvText == null ? '<html>no mer fixture</html>' : merCsvText)
-      : String(url).includes('sheet=Meta') ? (metaCsvText == null ? csvText : metaCsvText)
-      : csvText) }),
+    fetch: (url) => {
+      const u = String(url);
+      fetchLog.push(u);
+      // BFCM tabs first; the Log URL contains the Config URL, so it is matched before it
+      const body = u.includes('sheet=BFCM%20Daily') ? bf.daily
+        : u.includes('sheet=BFCM%20Config%20Log') ? bf.log
+        : u.includes('sheet=BFCM%20Config') ? bf.config
+        : null;
+      if (u.includes('sheet=BFCM%20')) {
+        if (body === 'NETWORK-ERROR') return Promise.reject(new TypeError('Failed to fetch'));
+        return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(body == null ? '<html>no bfcm fixture</html>' : body) });
+      }
+      return Promise.resolve({ ok: true, text: () => Promise.resolve(
+        u.includes('sheet=Total%20MER') ? (merCsvText == null ? '<html>no mer fixture</html>' : merCsvText)
+        : u.includes('sheet=Meta') ? (metaCsvText == null ? csvText : metaCsvText)
+        : csvText) });
+    },
     console, setTimeout, clearTimeout, Event: function () {},
   };
+  if (opts.clock) {
+    const c = opts.clock;
+    Object.assign(sandbox, { setTimeout: c.setTimeout, clearTimeout: c.clear, setInterval: c.setInterval, clearInterval: c.clear, __simNow: c.now });
+  }
+  if (opts.location) { sandbox.location = opts.location; sandbox.history = { replaceState() {} }; }
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
+  if (opts.clock) vm.runInContext('Date.now = function () { return __simNow(); };', sandbox);
+  for (const src of parts.srcs) vm.runInContext(fs.readFileSync(path.join(parts.dir, src), 'utf8'), sandbox, { filename: src });
   vm.runInContext(code, sandbox, { filename: 'apollo-page.js' });
-  return { sandbox, els, createdCharts, code };
+  return { sandbox, els, createdCharts, code, fetchLog, documentStub, bf };
 }
 const flush = () => new Promise(r => setImmediate(() => setImmediate(r)));
 
@@ -122,6 +214,19 @@ async function main() {
   catch (e) { syntaxOK = false; }
   fs.unlinkSync(tmp);
   check('page script passes node --check', syntaxOK);
+  {
+    // v4: the page loads bfcm-core.js + bfcm-view.js (cache-busted ?v=4.0.0) BEFORE the inline script
+    const parts = pageParts(PAGE);
+    check('page loads bfcm-core.js and bfcm-view.js (?v=4.0.0) before the inline script',
+      /<script src="bfcm-core\.js\?v=4\.0\.0"><\/script>\s*<script src="bfcm-view\.js\?v=4\.0\.0"><\/script>\s*<script>/.test(html) && parts.srcs.join() === 'bfcm-core.js,bfcm-view.js');
+    for (const f of ['bfcm-core.js', 'bfcm-view.js']) {
+      let ok = true;
+      try { execFileSync(process.execPath, ['--check', path.join(parts.dir, f)], { stdio: 'pipe' }); } catch (e) { ok = false; }
+      check(f + ' passes node --check', ok);
+    }
+    check('version marker line 2 is v4.0.0', html.split(/\r?\n/)[1] === '<!-- apollo-dashboard v4.0.0 -->');
+    check('footer shows v4.0.0', /<footer>[\s\S]*v4\.0\.0[\s\S]*<\/footer>/.test(html));
+  }
 
   const sheetId = (code.match(/SHEET_ID\s*=\s*'([^']+)'/) || [])[1];
   check('SHEET_ID present', !!sheetId);
@@ -603,6 +708,299 @@ async function main() {
     await TA.switchChannel('meta'); await flush();
     check('meta renders while google is broken', !!(TA.data && TA.data.length));
     check('window controls visible on meta when google is broken', t.els.controls && t.els.controls.style.visibility === 'visible');
+  }
+
+  // ================================================================ v4
+  // ---------------- the three weekly views render exactly as v3.3.0 did on the same CSVs
+  section('weekly views identical to v3.3.0 (same CSVs)');
+  {
+    const v33 = path.join(os.tmpdir(), 'apollo-render-sim-v330-index.html');
+    let got = true;
+    try { fs.writeFileSync(v33, execFileSync('git', ['-C', REPO_DIR, 'show', '3241eb2:index.html'], { stdio: ['ignore', 'pipe', 'ignore'] })); } catch (e) { got = false; }
+    check('v3.3.0 page extracted from git (3241eb2:index.html)', got);
+    if (got) {
+      const snap = async (page) => {
+        const t = bootPage(csv, metaCsv, merCsv, { page }); await flush();
+        const TA = t.sandbox.window.__apollo;
+        const txt = id => (t.els[id] ? String(t.els[id].textContent) : '');
+        const grab = () => ({ html: t.els.content.innerHTML, chrome: [txt('subline'), txt('footnote'), txt('channelhint'), txt('week-ending'), txt('wcount')].join(' | '),
+          charts: JSON.stringify(t.createdCharts.filter(c => !c.destroyed).map(c => c.config.data)) });
+        const out = { google: grab() };
+        await TA.switchChannel('meta'); await flush(); out.meta = grab();
+        await TA.switchChannel('mer'); await flush(); out.mer = grab();
+        return out;
+      };
+      const a = await snap(v33), b = await snap(PAGE);
+      // spec 23: esc() now also writes ' as &#39; and " as &quot;. Inside text both spellings parse to the
+      // same character, so the browser's DOM is identical; the stub DOM keeps the raw string, so decode first.
+      const decode = s => String(s).replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+      const firstDiff = (x, y) => { let i = 0; while (i < x.length && x[i] === y[i]) i++; return i >= x.length && i >= y.length ? '' : `at ${i}: v3.3 "${x.slice(Math.max(0, i - 40), i + 40)}" vs v4 "${y.slice(Math.max(0, i - 40), i + 40)}"`; };
+      for (const k of ['google', 'meta', 'mer']) {
+        const raw = a[k].html === b[k].html;
+        check(`${k}: content HTML identical to v3.3.0 (raw ${raw ? 'byte-identical' : 'differs only by esc() quote entities'})`, decode(b[k].html) === a[k].html, firstDiff(a[k].html, decode(b[k].html)));
+        check(`${k}: subline, footnote, channel hint, week ending, window count identical`, a[k].chrome === b[k].chrome, `v3.3 ${a[k].chrome}\n        v4   ${b[k].chrome}`);
+        check(`${k}: chart data identical`, a[k].charts === b[k].charts);
+      }
+    }
+  }
+
+  // ---------------- BFCM 2026 view (fixtures, fake clock)
+  section('bfcm channel (fixture)');
+  const bfOK = !!(BFX.daily && BFX.config && BFX.log);
+  check('BFCM fixtures present in ' + path.relative(process.cwd(), BFCM_DIR), bfOK);
+  // independent readers over the fixture CSV (never bfcm-core.js, the code under test)
+  const bfRows = bfOK ? indieRows(BFX.daily).slice(1).filter(r => /^\d{4}-\d{2}-\d{2}$/.test(r[0])) : [];
+  const bfSum = (from, to, col) => {
+    let s = 0, n = 0;
+    for (let d = from; d <= to; d = new Date(Date.parse(d + 'T00:00:00Z') + 86400000).toISOString().slice(0, 10)) {
+      const r = bfRows.find(x => x[0] === d);
+      if (!r || r[col] === '') return null;
+      s += parseFloat(r[col]); n++;
+    }
+    return n ? s : null;
+  };
+  const iX = v => v.toFixed(1) + 'x';
+  const i$ = v => '$' + Math.round(v).toLocaleString('en-US');
+  // a tile's value and sub line by its id (tiles are <div class="tile ..." id="bf-t-KEY"><div class="k">..</div><div class="v">..</div><div class="s">..</div></div>)
+  const tileOf = (h, key) => {
+    const m = new RegExp('id="bf-t-' + key + '"[^>]*>\\s*<div class="k">([\\s\\S]*?)</div>\\s*<div class="v">([\\s\\S]*?)</div>\\s*<div class="s">([\\s\\S]*?)</div>').exec(h);
+    return m ? { k: m[1], v: m[2], s: m[3] } : { k: '', v: '(tile missing)', s: '' };
+  };
+  const BFCM_ON = ["key:'bfcm', label:'BFCM 2026', enabled:false", "key:'bfcm', label:'BFCM 2026', enabled:true"];
+  const bfUrls = log => ({
+    daily: log.filter(u => u.includes('sheet=BFCM%20Daily')).length,
+    config: log.filter(u => u.includes('sheet=BFCM%20Config') && !u.includes('sheet=BFCM%20Config%20Log')).length,
+    log: log.filter(u => u.includes('sheet=BFCM%20Config%20Log')).length,
+  });
+  // boot the page, flip the launch switch in the sandbox (as the mer section does) and open the view
+  const bootBfcm = async (o) => {
+    o = o || {};
+    const clock = makeClock(o.now || '2026-10-17T18:00:00.000Z');
+    const bf = Object.assign({}, BFX, o.bf || {});
+    const t = bootPage(csv, metaCsv, merCsv, { clock, bfcm: bf, patch: o.patch, location: o.location });
+    await flush();
+    const TA = t.sandbox.window.__apollo, V = t.sandbox.BFCM_VIEW;
+    if (o.open !== false) {
+      TA.CHANNELS.bfcm.enabled = true;
+      if (o.configWrites) TA.CHANNELS.bfcm.configWrites = true;
+      await TA.switchChannel('bfcm'); await flush();
+    }
+    return { t, TA, V, clock, bf, html: () => String(t.els.content.innerHTML || '') };
+  };
+
+  if (bfOK) {
+    // ---- shipped state: hidden pill, deep link ignored, no BFCM fetch
+    {
+      const t = bootPage(csv, metaCsv, merCsv, { clock: makeClock('2026-10-17T18:00:00.000Z'), location: { hash: '#bfcm', pathname: '/', search: '' } });
+      await flush();
+      const TA = t.sandbox.window.__apollo, B = TA.CHANNELS.bfcm || {};
+      check('CHANNELS.bfcm ships enabled:false, configWrites:false, endpointUrl empty, refreshMs 900000',
+        B.key === 'bfcm' && B.label === 'BFCM 2026' && B.enabled === false && B.configWrites === false && B.endpointUrl === '' && B.refreshMs === 900000, JSON.stringify({ enabled: B.enabled, configWrites: B.configWrites, refreshMs: B.refreshMs }));
+      check('CHANNELS.bfcm CSV URLs pinned to the three BFCM tabs',
+        /&sheet=BFCM%20Daily$/.test(B.dailyCsvUrl || '') && /&sheet=BFCM%20Config$/.test(B.configCsvUrl || '') && /&sheet=BFCM%20Config%20Log$/.test(B.logCsvUrl || ''));
+      check('CHANNELS.bfcm subline copy', B.subline === 'Prepared by Elite Brands · BFCM 2026 · All figures CAD · Toronto days', B.subline);
+      check('pill #ch-bfcm hidden while enabled:false', !!t.els['ch-bfcm'] && t.els['ch-bfcm'].style.display === 'none');
+      check('#bfcm deep link ignored while enabled:false (google stays, no BFCM fetch, view not mounted)',
+        TA.channel === 'google' && !t.fetchLog.some(u => u.includes('sheet=BFCM%20')) && !(t.sandbox.BFCM_VIEW && t.sandbox.BFCM_VIEW._state && t.sandbox.BFCM_VIEW._state.mounted), `channel=${TA.channel}`);
+      await TA.switchChannel('bfcm'); await flush();
+      check('switchChannel(bfcm) is a no-op while disabled', TA.channel === 'google' && !t.fetchLog.some(u => u.includes('sheet=BFCM%20')));
+      check('channel hint does not claim four views while bfcm is off', !/Four views/.test((t.els.channelhint && t.els.channelhint.textContent) || ''));
+      check('esc() also escapes " and \' (spec 23)', typeof TA.esc === 'function' && TA.esc(`<a href="x">'&`) === '&lt;a href=&quot;x&quot;&gt;&#39;&amp;');
+      check('__apollo exposes the pure forecast (spec 19)', typeof TA.forecast === 'function');
+    }
+    // ---- launch switch on before boot: the #bfcm deep link opens the view
+    {
+      const { t, TA, V } = await bootBfcm({ open: false, patch: [BFCM_ON], location: { hash: '#bfcm', pathname: '/', search: '' } });
+      await flush();
+      const n = bfUrls(t.fetchLog);
+      check('enabled:true: #bfcm deep link opens the BFCM view', TA.channel === 'bfcm' && !!(V && V._state && V._state.mounted), `channel=${TA.channel}`);
+      check('enabled:true: each BFCM tab fetched once on open', n.daily === 1 && n.config === 1 && n.log === 1, JSON.stringify(n));
+      check('enabled:true: pill visible and hint names four views', t.els['ch-bfcm'].style.display !== 'none' && /Four views/.test((t.els.channelhint && t.els.channelhint.textContent) || ''));
+    }
+
+    // ---- the view on the fixture, 17 Oct 14:00 Toronto (Meta last pulled 31.9 h ago)
+    const googleBefore = { html: '' };
+    {
+      const { t, TA, V, clock, html } = await bootBfcm({ open: false });
+      googleBefore.html = t.els.content.innerHTML;
+      TA.CHANNELS.bfcm.enabled = true;
+      await TA.switchChannel('bfcm'); await flush();
+      const h = html(), S = V && V._state;
+      check('view mounts with the 16 fixture rows', !!S && S.mounted === true && S.rows.length === 16, S ? `rows=${S.rows.length}` : 'no _state');
+      if (!S) { finish(); return; }
+      check('weekly #controls hidden in the BFCM view', t.els.controls.style.display === 'none');
+      check('subline + footnote switch to the BFCM copy', t.els.subline.textContent === TA.CHANNELS.bfcm.subline && t.els.footnote.textContent === TA.CHANNELS.bfcm.footnote);
+      const fn = TA.CHANNELS.bfcm.footnote || '';
+      check('footnote names every basis (conversion time, Meta 7d/1d, Tracked Revenue = Total MER basis, Bank of Canada, Toronto days)',
+        /conversion time/.test(fn) && /7-day click \/ 1-day view/.test(fn) && /Tracked Revenue/.test(fn) && /Total MER/.test(fn) && /Bank of Canada/.test(fn) && /Toronto/.test(fn), fn);
+      check('no em-dash anywhere in the view or its chrome', !/—/.test(h + fn + TA.CHANNELS.bfcm.subline));
+      check('default window = Sale to date, 13 to 16 Oct', S.window && S.window.preset === 'sale' && S.window.from === '2026-10-13' && S.window.to === '2026-10-16', JSON.stringify(S.window));
+      check('Toronto today = 2026-10-17 and the phase strip marks it', S.today === '2026-10-17' && /Today · 17 Oct/.test(h), S.today);
+
+      // band 2 tiles vs an independent sum/sum from the fixture CSV
+      const gS = bfSum('2026-10-13', '2026-10-16', 1), gR = bfSum('2026-10-13', '2026-10-16', 2);
+      const tg = tileOf(h, 'google');
+      check('Google ROAS tile = sum(revenue) / sum(spend) over 13..16 Oct (independent)', tg.v === iX(gR / gS) && Math.abs(S.totals.google.roas - gR / gS) < 1e-9, `${tg.v} vs ${iX(gR / gS)}`);
+      check('Google ROAS tile names its target from config', /target 12\.0x/.test(tg.s), tg.s);
+      const tm = tileOf(h, 'meta');
+      check('Meta ROAS tile: gap on 14 Oct shows "-" plus "missing 14 Oct", never a partial sum', tm.v === '-' && /missing 14 Oct/.test(tm.s) && S.totals.meta.spend === null, `${tm.v} | ${tm.s}`);
+      const tx = tileOf(h, 'mer');
+      check('MER tile: "-" (Meta gap) and carries "uses stale Meta data"', tx.v === '-' && /uses stale Meta data/.test(tx.s), `${tx.v} | ${tx.s}`);
+      check('MER tile names the MER target from the log (11.5x)', /target 11\.5x/.test(tx.s), tx.s);
+      check('Google ROAS tile carries no stale note (Google is fresh)', !/stale/.test(tg.s), tg.s);
+      check('stale banner names Meta with its last update in Toronto time', /Meta data last updated 16 Oct, 6:05 am Toronto time/.test(h), (h.match(/class="bf-stale"[^]*?<\/div>/) || [''])[0]);
+      check('no stale banner for Google or the store (fresh sources are not hidden by a stale one)', !/Google data last updated/.test(h) && !/Store data last updated/.test(h));
+      check('data freshness line shows each source in Toronto time', /Google 17 Oct, 6:00 am/.test(h) && /Toronto time/.test(h));
+      const ts = tileOf(h, 'sale');
+      check('Sale to date tile present and honest about the Meta gap', /Sale to date/.test(ts.k) && ts.v === '-' && /missing 14 Oct/.test(ts.s), `${ts.v} | ${ts.s}`);
+
+      // daily chart
+      const live = t.createdCharts.filter(c => !c.destroyed);
+      const ds = live[0] ? live[0].config.data.datasets : [];
+      const labels = ds.map(d => d.label).join(',');
+      check('one daily chart: Google spend, Meta spend bars + Google ROAS, Meta ROAS, MER lines + MER target', live.length === 1 && labels === 'Google spend,Meta spend,Google ROAS,Meta ROAS,MER,MER target', `${live.length} charts: ${labels}`);
+      const sc = live[0] ? live[0].config.options.scales : {};
+      check('spend and ratios sit in stacked panels (shared stack key), never two overlaid y-axes',
+        ds.length === 6 && ds[0].yAxisID === 'ySpend' && ds[1].yAxisID === 'ySpend' && ds.slice(2).every(d => d.yAxisID === 'yRatio') && sc.ySpend && sc.yRatio && sc.ySpend.stack && sc.ySpend.stack === sc.yRatio.stack);
+      check('chart covers the window (4 days) and Meta spend on 14 Oct is null, never 0', ds.length === 6 && ds[1].data.length === 4 && ds[1].data[1] === null, ds[1] && JSON.stringify(ds[1].data));
+      check('MER target line = 11.5 on every day', ds[5] && ds[5].data.every(v => v === 11.5));
+      check('recent-day tags: Google "may still rise", Meta "filling in"', /may still rise/.test(h) && /filling in/.test(h));
+      check('no expected-landed scale-up wording (D1)', !/expected|lag included/i.test(h));
+      // weekly table: Mon-Sun Toronto weeks, current week + projected run-rate row
+      check('weekly table: Mon-Sun week row for 12 to 18 Oct clipped to 13 to 16 Oct, plus a projected run-rate row', /13 to 16 Oct/.test(h) && /projected full week/.test(h) && /run-rate/.test(h));
+
+      // band 1: read-only budget (configWrites:false)
+      check('configWrites:false: no edit controls, no Save button', !/data-bf="budget-total"/.test(h) && !/Save for everyone/.test(h) && !/data-bf="target"/.test(h));
+      check('budget band shows the log value (32000, Google 70%) read-only', /\$32,000/.test(h) && /Google 70%/.test(h) && /\$22,400/.test(h));
+      check('"Set by" names the log author, escaped, with a Toronto time', /Set by Mac O&#39;Neil &quot;Mac&quot; · 15 Oct, 10:00 am Toronto time/.test(h), (h.match(/Set by[^<]*/) || [''])[0]);
+      check('XSS: who = <img src=x onerror=alert(1)> renders as text only', !/<img/i.test(h) && h.includes('&lt;img src=x onerror=alert(1)&gt;'));
+      check('pacing caption "At the last-7-day pace"', /At the last-7-day pace/.test(h));
+      const gSpent = bfSum('2026-10-01', '2026-10-16', 1), gAvg7 = bfSum('2026-10-10', '2026-10-16', 1) / 7, gLands = gSpent + gAvg7 * 15;
+      check('Google pacing bar: lands at = spent (1..16 Oct) + last-7 avg x 15 days (independent), % of $22,400',
+        h.includes(i$(gLands)) && h.includes(Math.round(gLands / 22400 * 100) + '% of'), `want ${i$(gLands)} (${Math.round(gLands / 22400 * 100)}%)`);
+      check('Meta pacing bar stops at its complete-through day and names the gap', /to 13 Oct/.test(h) && (h.match(/missing 14 Oct/g) || []).length >= 2);
+      check('edit() is refused while configWrites:false', V.edit('budget 2026-10', 1, 50) === false && Object.keys(S.unsaved).length === 0);
+      V.setMonth('2026-12');
+      const hd = html();
+      check('December: "No budget set" and "Starts 1 Dec"', S.month === '2026-12' && /No budget set/.test(hd) && /Starts 1 Dec/.test(hd));
+      V.setMonth('2026-11');
+      check('November: budget $60,000 (config default) and "Starts 1 Nov"', /\$60,000/.test(html()) && /Starts 1 Nov/.test(html()));
+      V.setMonth('2026-10');
+
+      // custom window with every source complete: MER + Meta ROAS vs independent sums; pre-sale days greyed
+      V.setCustom('2026-10-01', '2026-10-13');
+      const h2 = html(), S2 = V._state;
+      const mS = bfSum('2026-10-01', '2026-10-13', 4), mR = bfSum('2026-10-01', '2026-10-13', 5);
+      const g2 = bfSum('2026-10-01', '2026-10-13', 1), st = bfSum('2026-10-01', '2026-10-13', 13);
+      check('custom 1..13 Oct: Meta ROAS = sum/sum (independent)', tileOf(h2, 'meta').v === iX(mR / mS) && Math.abs(S2.totals.meta.roas - mR / mS) < 1e-9, `${tileOf(h2, 'meta').v} vs ${iX(mR / mS)}`);
+      check('custom 1..13 Oct: MER = store revenue / (Google + Meta spend) (independent)', tileOf(h2, 'mer').v === iX(st / (g2 + mS)) && Math.abs(S2.totals.mer.value - st / (g2 + mS)) < 1e-9, `${tileOf(h2, 'mer').v} vs ${iX(st / (g2 + mS))}`);
+      check('custom window does not move the Sale to date tile', tileOf(h2, 'sale').v === '-');
+      const c2 = t.createdCharts.filter(c => !c.destroyed)[0];
+      const bg = c2 ? c2.config.data.datasets[0].backgroundColor : [];
+      check('pre-sale days (1..12 Oct) greyed in the chart', Array.isArray(bg) && bg.length === 13 && bg[0] !== bg[12] && bg.slice(0, 12).every(x => x === bg[0]));
+      V.setPreset('sale');
+
+      // band 3 forecast: play-only, deterministic, bounded, never "unsaved"
+      const fo = () => String((t.els['bf-fc-out'] && t.els['bf-fc-out'].innerHTML) || '');
+      check('forecast outputs render, each with its basis line', /Based on/.test(h) && /spend lands at/.test(h) && /Store revenue lands at/.test(h) && /Sale MER lands at/.test(h) && /Google-reported revenue/.test(h) && /Meta-reported revenue/.test(h) && /Spend ceiling/.test(h));
+      check('platform revenues shown separately, never summed', !/Google \+ Meta revenue|combined platform revenue/i.test(h));
+      V.setSlider('spend.google', 0.5); const a1 = fo();
+      V.setSlider('spend.google', 0.5); const a2 = fo();
+      check('forecast is deterministic for the same sliders (seeded)', a1 && a1 === a2);
+      V.setSlider('spend.google', 9); V.setSlider('roas.meta', 0.01);
+      check('slider bounds clamp (+100% spend, 0.5x ROAS)', S.sliders.spend.google === 1 && S.sliders.roas.meta === 0.5, JSON.stringify(S.sliders));
+      check('forecast sliders never mark anything unsaved', Object.keys(S.unsaved).length === 0 && !/Unsaved/.test(html() + fo()));
+      V.resetSliders();
+      check('Reset returns every slider to neutral', S.sliders.spend.google === 0 && S.sliders.spend.meta === 0 && S.sliders.roas.google === 1 && S.sliders.roas.meta === 1 && S.sliders.basis === 'last7');
+
+      // leaving the view stops every timer and restores the weekly page
+      await TA.switchChannel('google'); await flush();
+      const pend = clock.pending(), before = t.fetchLog.length;
+      await clock.advance(3600000);
+      check('leaving BFCM: view unmounted, all timers stopped, no further fetches', S.mounted === false && pend === 0 && t.fetchLog.length === before, `pending=${pend} fetches+${t.fetchLog.length - before}`);
+      check('leaving BFCM: weekly controls back, google HTML identical to before the visit', t.els.controls.style.display === '' && t.els.content.innerHTML === googleBefore.html);
+    }
+
+    // ---- broken feeds
+    {
+      const shifted = indieRows(BFX.daily).map((r, i) => { const c = r.slice(); c.splice(2, 0, i === 0 ? 'Inserted Col' : '123'); return c; })
+        .map(r => r.map(x => '"' + String(x).replace(/"/g, '""') + '"').join(',')).join('\n');
+      const { t, V, html } = await bootBfcm({ bf: { daily: shifted } });
+      check('header-shift fixture: no rows accepted, error banner, no chart', V._state.rows.length === 0 && /needs attention/.test(html()) && t.createdCharts.filter(c => !c.destroyed).length === 0);
+    }
+    {
+      const { V, html } = await bootBfcm({ bf: { config: '<html>not a csv</html>' } });
+      const h = html();
+      check('config read fails: "Budget settings could not be read", data bands still work, no % of budget', /Budget settings could not be read/.test(h) && /x$/.test(tileOf(h, 'google').v) && !/% of \$/.test(h) && V._state.rows.length === 16);
+    }
+    {
+      const { html } = await bootBfcm({ bf: { log: '<html>not a csv</html>' } });
+      check('log read fails: same message, no guessed budget', /Budget settings could not be read/.test(html()) && !/% of \$/.test(html()));
+    }
+
+    // ---- refresh timers on a fake clock (17 Oct 08:00 Toronto: every source fresh)
+    {
+      const { t, V, clock, html } = await bootBfcm({ now: '2026-10-17T12:00:00.000Z' });
+      const D = t.documentStub;
+      check('fresh fixture at 08:00 Toronto: no stale banner', !/data last updated/.test(html()));
+      await clock.advance(16 * 60000);
+      let n = bfUrls(t.fetchLog);
+      check('fake clock +16 min: all three BFCM tabs fetched a second time', n.daily === 2 && n.config === 2 && n.log === 2, JSON.stringify(n));
+      D.visibilityState = 'hidden';
+      await clock.advance(16 * 60000);
+      n = bfUrls(t.fetchLog);
+      check('hidden tab: no refetch', n.daily === 2, JSON.stringify(n));
+      D.visibilityState = 'visible'; D.fire('visibilitychange'); await flush();
+      n = bfUrls(t.fetchLog);
+      check('back to visible after > 5 min: refetch at once', n.daily === 3 && n.config === 3 && n.log === 3, JSON.stringify(n));
+      D.fire('visibilitychange'); await flush();
+      check('back to visible again within 5 min: no extra fetch', bfUrls(t.fetchLog).daily === 3);
+      // 30 h threshold: Meta pulled 2026-10-16T10:05Z goes stale at 2026-10-17T16:05Z. Hidden tab = no
+      // refetch, so only the 60 s timer can flip the banner on.
+      D.visibilityState = 'hidden';
+      await clock.advance(4 * 3600000);
+      check('fake clock across 30 h: Meta banner appears without a reload or refetch (60 s timer)', /Meta data last updated 16 Oct, 6:05 am Toronto time/.test(html()) && bfUrls(t.fetchLog).daily === 3);
+      void V;
+    }
+    {
+      // Toronto today, not the machine's: 2026-10-17T03:00Z is 16 Oct 23:00 in Toronto (17 Oct in UTC and Brisbane)
+      const { V, clock, html } = await bootBfcm({ now: '2026-10-17T03:00:00.000Z' });
+      check('today marker uses the Toronto date (16 Oct at 23:00 Toronto)', V._state.today === '2026-10-16' && /Today · 16 Oct/.test(html()), V._state.today);
+      await clock.advance(2 * 3600000);
+      check('60 s timer moves the today marker past Toronto midnight', V._state.today === '2026-10-17' && /Today · 17 Oct/.test(html()), V._state.today);
+    }
+
+    // ---- config edit controls (configWrites:true in the sandbox; saving arrives in Task 11)
+    {
+      const { V, clock, bf, html } = await bootBfcm({ now: '2026-10-17T12:00:00.000Z', configWrites: true });
+      const h = html();
+      check('configWrites:true: budget total, split slider, Save button and Targets panel render', /data-bf="budget-total"/.test(h) && /data-bf="budget-pct"/.test(h) && /Save for everyone/.test(h) && /data-bf="target"/.test(h) && /Targets/.test(h));
+      check('controls show the current values (log over defaults)', /data-bf="budget-total"[^>]*value="32000"/.test(h) && /data-bf="budget-pct"[^>]*value="70"/.test(h));
+      check('no config string or who in an attribute (spec 23)', !/="[^"]*(Mac|onerror)[^"]*"/.test(h));
+      check('edit() marks the budget Unsaved', V.edit('budget 2026-10', 45000, 60) === true && !!V._state.unsaved['budget 2026-10']);
+      bf.log = bf.log.replace(/\n?$/, '\n') + '"3","2026-10-17T12:10:00.000Z","Maria","budget 2026-10","35000","70","c3d4e5f6-0718-4293-a4b5-c6d7e8f90a1b"\n';
+      await clock.advance(16 * 60000);
+      const h2 = html();
+      check('refresh adopts the newer saved value in state (35000)', V._state.cfg.budgets['2026-10'] && V._state.cfg.budgets['2026-10'].total === 35000);
+      check('refresh keeps the unsaved budget in its control (45000, 60%)', /data-bf="budget-total"[^>]*value="45000"/.test(h2) && /data-bf="budget-pct"[^>]*value="60"/.test(h2) && /Unsaved/.test(h2));
+      check('refresh shows "Newer saved value: <v> by <who>" beside it', /Newer saved value: \$35,000 · Google 70% by Maria/.test(h2), (h2.match(/Newer saved value[^<]*/) || ['(none)'])[0]);
+    }
+  }
+
+  // ---------------- the live BFCM tabs parse and render (live runs only)
+  if (!LOCAL_CSV) {
+    section('bfcm channel (live sheet)');
+    const base = csvUrl.replace('&sheet=Sheet1', '&sheet=');
+    let live = null;
+    try { live = { daily: await fetchCSV(base + 'BFCM%20Daily'), config: await fetchCSV(base + 'BFCM%20Config'), log: await fetchCSV(base + 'BFCM%20Config%20Log') }; } catch (e) { live = null; }
+    check('live BFCM tabs fetched', !!live);
+    if (live) {
+      const { V, html } = await bootBfcm({ now: new Date().toISOString(), bf: live });
+      const h = html();
+      check('live: rows parsed (>= 15 days from 1 Oct)', V._state.rows.length >= 15 && V._state.rows[0].date === '2026-10-01', `rows=${V._state.rows.length}`);
+      check('live: header tripwire passes and the config reads', !/needs attention/.test(h) && !/could not be read/.test(h));
+      check('live: Google ROAS tile renders a value', /x$/.test(tileOf(h, 'google').v), tileOf(h, 'google').v);
+    }
   }
 
   finish();
